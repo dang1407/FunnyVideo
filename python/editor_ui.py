@@ -1,5 +1,5 @@
 import tkinter as tk
-from email.policy import default
+import platform
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 import os
@@ -8,12 +8,11 @@ from PIL import Image, ImageTk
 from tkinterdnd2 import DND_FILES
 import json
 import subprocess
-from datetime import timedelta
 import threading
 import datetime
 from typing import Optional
-
 from python.clip_selector import save_used_videos
+import time
 
 # --- Hằng số và đường dẫn ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -76,18 +75,25 @@ class EditorWindow(tk.Toplevel):
         self.imported_clips = []  # List các dictionary chứa thông tin clip
         self.timeline_clips = []
         self.drag_source_index = None  # Lưu vị trí clip đang được kéo
-
+        # --- Thêm cho phát video ---
+        self.current_player = None  # Thread phát video
+        self.is_playing = False
+        self.current_video_path = None
+        self.current_frame_label = None  # Label hiển thị video
+        self.current_cap = None
+        self.play_button = None  # Nút Play/Pause
+        # --------------------------------
         self._create_menu()
         self._create_layout()
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
     def _on_closing(self):
-        # Dọn dẹp file thumbnail tạm
+        self._stop_current_video()
         if TEMP_DIR.exists():
             for f in TEMP_DIR.glob("thumb_*.png"):
                 try:
                     os.remove(f)
-                except OSError:
+                except:
                     pass
         self.master.deiconify()
         self.destroy()
@@ -131,45 +137,72 @@ class EditorWindow(tk.Toplevel):
 
         add_to_timeline_button = ttk.Button(media_container, text="Thêm các clip đã chọn vào Timeline ↓",
                                             command=self._add_selected_to_timeline)
-        add_to_timeline_button.pack(side="top", fill="x", pady=5)
+        add_to_timeline_button.pack(side="top", padx=5, pady=5)
+
+        render_video_btn = ttk.Button(media_container, text="Render Video",
+                                            command=self._render_video)
+        render_video_btn.pack(side="top", padx=20, pady=20)
 
     def _redraw_media_bin(self):
         """Vẽ lại toàn bộ danh sách media clip."""
-        # Xóa các widget cũ
+        # Xóa các widget cũ để vẽ lại
         for widget in self.media_items_frame.winfo_children():
             widget.destroy()
 
-        # Giữ một tham chiếu đến các đối tượng ảnh để tránh bị xóa
-        self._image_references = []
+        self._image_references = []  # Giữ tham chiếu ảnh
+        number_selected_clips = 0
+        for i, clip in enumerate(self.imported_clips):
+            if clip["var"].get():
+                number_selected_clips += 1
 
         for i, clip in enumerate(self.imported_clips):
-            # Tạo một frame cho mỗi item
+            # Frame chính cho mỗi item
             item_frame = ttk.Frame(self.media_items_frame, padding=5, relief="groove", borderwidth=1)
             item_frame.pack(fill="x", padx=5, pady=2)
-            item_frame.clip_index = i  # Gán index để nhận biết khi kéo thả
+            # --- GÁN INDEX VÀO FRAME ĐỂ NHẬN DIỆN KHI KÉO THẢ ---
+            item_frame.clip_index = i
 
-            # Tải và hiển thị thumbnail
-            img = Image.open(clip["thumb_path"])
-            photo = ImageTk.PhotoImage(img)
-            thumb_label = ttk.Label(item_frame, image=photo)
-            thumb_label.pack(side="left", padx=5)
-            thumb_label.image = photo  # Giữ tham chiếu
-            self._image_references.append(photo)
+            # Thumbnail
+            try:
+                img = Image.open(clip["thumb_path"])
+                # Thay đổi: Sử dụng Image.Resampling.LANCZOS thay vì Image.ANTIALIAS
+                img = img.resize(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                thumb_label = ttk.Label(item_frame, image=photo)
+                thumb_label.pack(side="left", padx=5)
+                thumb_label.image = photo
+                self._image_references.append(photo)
+            except Exception:
+                # Tạo một thumbnail trống nếu có lỗi
+                empty_thumb = Image.new('RGB', THUMBNAIL_SIZE, (50, 50, 50))
+                photo = ImageTk.PhotoImage(empty_thumb)
+                thumb_label = ttk.Label(item_frame, image=photo)
+                thumb_label.pack(side="left", padx=5)
+                thumb_label.image = photo
+                self._image_references.append(photo)
 
             # Checkbox
             check = ttk.Checkbutton(item_frame, variable=clip["var"])
             check.pack(side="left", padx=5)
+            check.configure(command=lambda clip_index = i: self.toggle_select_clip(clip_index))
 
-            # Tên file và thời lượng
+            # Thông tin
             info_text = f"{os.path.basename(clip['path'])}\n[{format_time(clip['duration'])}]"
-            info_label = ttk.Label(item_frame, text=info_text, justify="left")
-            info_label.pack(side="left", fill="x", expand=True)
+            info_label = ttk.Label(item_frame, text=info_text, justify="left", font=("Arial", 8))
+            info_label.pack(side="left", fill="x", expand=True, padx=5)
 
-            # --- Kích hoạt Kéo-Thả để Sắp xếp ---
-            for widget in [item_frame, thumb_label, info_label, check]:
-                widget.dnd_bind('<<DragInitCmd>>', self._on_drag_start)
-                widget.dnd_bind('<<Drop>>', self._on_drop_reorder)
+            # Nút Play (Bạn có thể thêm hàm _open_in_default_player sau)
+            play_btn = ttk.Button(item_frame, text="▶", width=4)  # Rút gọn text
+            play_btn.pack(side="right", padx=5)
+            play_btn.configure(command=lambda p=clip["path"]: self._open_in_default_player(p))
 
+            if clip["var"].get() and (i != number_selected_clips - 1 or i != 0):
+                go_to_top_btn = ttk.Button(item_frame, text="⬆", width=4)
+                go_to_top_btn.pack(side="right", padx=5)
+                go_to_top_btn.configure(command=lambda clip_index=i: self.change_clip_index_by_offset(clip_index, 1))
+                go_to_bottom_btn = ttk.Button(item_frame, text="⬇", width=4)
+                go_to_bottom_btn.pack(side="right", padx=5)
+                go_to_bottom_btn.configure(command=lambda clip_index=i: self.change_clip_index_by_offset(clip_index, -1))
     # --- CÁC HÀM XỬ LÝ SỰ KIỆN ---
     def _import_clips_from_dialog(self):
         initial_dir = PROJECT_ROOT / "Main_clips"
@@ -201,30 +234,30 @@ class EditorWindow(tk.Toplevel):
 
         if newly_added: self._redraw_media_bin()
 
-    def _on_drag_start(self, event):
-        """Khi bắt đầu kéo một item."""
-        # Tìm frame cha (item_frame) của widget đã trigger sự kiện
-        widget = event.widget
-        while not hasattr(widget, 'clip_index'):
-            widget = widget.master
-        self.drag_source_index = widget.clip_index
-        return 'move'  # Trả về hành động
-
-    def _on_drop_reorder(self, event):
-        """Khi thả một item vào một item khác."""
-        if self.drag_source_index is None: return
-
-        widget = event.widget
-        while not hasattr(widget, 'clip_index'):
-            widget = widget.master
-        drop_target_index = widget.clip_index
-
-        # Sắp xếp lại list
-        dragged_item = self.imported_clips.pop(self.drag_source_index)
-        self.imported_clips.insert(drop_target_index, dragged_item)
-
-        self.drag_source_index = None  # Reset
-        self._redraw_media_bin()  # Vẽ lại với thứ tự mới
+    # def _on_drag_start(self, event):
+    #     """Khi bắt đầu kéo một item."""
+    #     # Tìm frame cha (item_frame) của widget đã trigger sự kiện
+    #     widget = event.widget
+    #     while not hasattr(widget, 'clip_index'):
+    #         widget = widget.master
+    #     self.drag_source_index = widget.clip_index
+    #     return 'move'  # Trả về hành động
+    #
+    # def _on_drop_reorder(self, event):
+    #     """Khi thả một item vào một item khác."""
+    #     if self.drag_source_index is None: return
+    #
+    #     widget = event.widget
+    #     while not hasattr(widget, 'clip_index'):
+    #         widget = widget.master
+    #     drop_target_index = widget.clip_index
+    #
+    #     # Sắp xếp lại list
+    #     dragged_item = self.imported_clips.pop(self.drag_source_index)
+    #     self.imported_clips.insert(drop_target_index, dragged_item)
+    #
+    #     self.drag_source_index = None  # Reset
+    #     self._redraw_media_bin()  # Vẽ lại với thứ tự mới
 
     def _add_selected_to_timeline(self):
         self.timeline_clips.clear()  # Xóa timeline cũ
@@ -530,6 +563,127 @@ class EditorWindow(tk.Toplevel):
             log_text.insert(tk.END, f"\n\n=== LỖI: {str(e)} ===\n")
             messagebox.showerror("Lỗi", f"Lỗi: {str(e)}")
 
+    def _play_video_in_tkinter(self, video_path):
+        """Phát video trong một Label của Tkinter"""
+        if self.current_player and self.current_player.is_alive():
+            self.is_playing = False
+            self.current_player.join(timeout=1)
+
+        self.is_playing = True
+        self.current_video_path = video_path
+        self.current_player = threading.Thread(target=self._video_player_loop, args=(video_path,), daemon=True)
+        self.current_player.start()
+
+    def _video_player_loop(self, video_path):
+        """Vòng lặp phát video bằng OpenCV + hiển thị trong Tkinter"""
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            self.after(0, lambda: messagebox.showerror("Lỗi", "Không thể mở video!"))
+            return
+
+        self.current_cap = cap
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        delay = int(1000 / fps) if fps > 0 else 33
+
+        while self.is_playing and cap.isOpened():
+            if not self.is_playing:
+                break
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Resize frame để vừa với khu vực xem trước (ví dụ: 640x360)
+            frame = cv2.resize(frame, (640, 360))
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(frame_rgb)
+            photo = ImageTk.PhotoImage(img)
+
+            # Cập nhật giao diện trong main thread
+            self.after(0, self._update_video_frame, photo)
+
+            time.sleep(max(1, delay) / 1000)  # Giữ frame rate
+
+        cap.release()
+        self.current_cap = None
+        self.is_playing = False
+        self.after(0, self._clear_video_preview)
+
+    def _update_video_frame(self, photo):
+        if self.current_frame_label:
+            self.current_frame_label.configure(image=photo)
+            self.current_frame_label.image = photo  # Giữ tham chiếu
+
+    def _clear_video_preview(self):
+        if self.current_frame_label:
+            self.current_frame_label.configure(image='')
+            self.current_frame_label.image = None
+        if self.play_button:
+            self.play_button.configure(text="▶ Play")
+
+    def _toggle_play_pause(self, video_path, button):
+        if self.current_video_path != video_path:
+            # Bắt đầu video mới
+            self._stop_current_video()
+            self._play_video_in_tkinter(video_path)
+            button.configure(text="⏸ Pause")
+            self.play_button = button
+        else:
+            # Đang phát → tạm dừng / tiếp tục
+            if self.is_playing:
+                self.is_playing = False
+                button.configure(text="▶ Play")
+            else:
+                self.is_playing = True
+                button.configure(text="⏸ Pause")
+                self.current_player = threading.Thread(target=self._video_player_loop, args=(video_path,), daemon=True)
+                self.current_player.start()
+
+    def _stop_current_video(self):
+        self.is_playing = False
+        if self.current_cap:
+            self.current_cap.release()
+            self.current_cap = None
+        if self.current_player and self.current_player.is_alive():
+            self.current_player.join(timeout=1)
+
+    def _open_in_default_player(self, path):
+        if self.current_video_path and os.path.exists(self.current_video_path):
+            open_file_cross_platform(self.current_video_path)  # Chỉ hoạt động trên Windows
+        elif path and os.path.exists(path):
+            open_file_cross_platform(path)
+        else:
+            messagebox.showinfo("Thông báo", "Chưa chọn video nào để mở.")
+    def toggle_select_clip(self, current_clip_index):
+        temp_clips = []
+        for index, clip in enumerate(self.imported_clips):
+            if clip["var"].get():
+                temp_clips.append(clip)
+        for index, clip in enumerate(self.imported_clips):
+            if not clip["var"].get() and index == current_clip_index:
+                temp_clips.append(clip)
+        for index, clip in enumerate(self.imported_clips):
+            if not clip["var"].get() and not index == current_clip_index:
+                temp_clips.append(clip)
+        self.imported_clips = temp_clips
+        self._redraw_media_bin()
+    def change_clip_index_by_offset(self, current_clip_index, offset):
+        temp_clips = []
+        number_clips = len(self.imported_clips)
+        for index, clip in enumerate(self.imported_clips):
+            if index < current_clip_index - offset:
+                temp_clips.append(clip)
+        if(offset > 0):
+            temp_clips.append(self.imported_clips[current_clip_index])
+            temp_clips.append(self.imported_clips[current_clip_index - offset])
+        else:
+            temp_clips.append(self.imported_clips[current_clip_index - offset])
+            temp_clips.append(self.imported_clips[current_clip_index])
+
+        for index, clip in enumerate(self.imported_clips):
+            if index > current_clip_index - offset and index != current_clip_index:
+                temp_clips.append(clip)
+        self.imported_clips = temp_clips
+        self._redraw_media_bin()
 def probe_duration_sec(video_path):
     """Dùng ffprobe để lấy thời lượng clip (giây)"""
     try:
@@ -655,7 +809,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     # Kiểm tra nếu không có clip nào được chọn
     if not selected_clips:
         raise RuntimeError("Không chọn được clip nào!")
-
+    all_duration = 0
     # Xử lý từng clip
     for i, item in enumerate(selected_clips):
         full = item["path"]
@@ -666,95 +820,120 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
         is_first = (i == 0)
         is_last = (i == len(selected_clips) - 1)
 
-        if is_first:
-            # Clip đầu tiên: chơi bình thường toàn bộ
-            clip_obj = main_clip_layer(full, 0.0, dur)
+        # Tạo clip chính (luôn chơi toàn bộ duration)
+        clip_obj = main_clip_layer(full, 0.0, dur)
 
-            # Thêm transition overlay vào cuối clip (nếu có clip tiếp theo)
-            if trans_frames > 0 and not is_last:
-                # Transition bắt đầu từ pre_s giây trước khi clip kết thúc
-                trans_start_in_clip = dur - pre_s
+        # TRANSITION ĐÈ VÀO CUỐI CLIP (nếu không phải clip cuối)
+        if trans_frames > 0 and not is_last:
+            # Transition bắt đầu từ pre_s giây trước khi clip kết thúc
+            trans_start_in_clip = dur - pre_s
 
-                clip_obj["layers"].append({
+            clip_obj["layers"].append({
+                "type": "video",
+                "path": trans_path,
+                "start": trans_start_in_clip,  # Bắt đầu trong clip này
+                "stop": dur,  # Kết thúc khi clip này kết thúc
+                "cutFrom": 0.0,
+                "cutTo": pre_s,  # Lấy pre_s giây đầu của transition
+                "resizeMode": "contain",
+                "mixVolume": 1
+            })
+
+            # Audio của transition (tính theo all_duration để đồng bộ toàn video)
+            audioTracks.append({
+                "path": trans_path,
+                "mixVolume": 1,
+                "cutFrom": 0.0,
+                "cutTo": trans_duration_s,
+                "start": all_duration + trans_start_in_clip  # Thời điểm trong toàn video
+            })
+
+        clips_json.append(clip_obj)
+        all_duration += dur
+
+        # GAP MÀU ĐEN (nếu có và không phải clip cuối)
+        if gap_s > 0 and trans_frames > 0 and not is_last:
+            gap_clip = black_gap_clip(gap_s)
+
+            # Transition tiếp tục chạy trong gap
+            gap_clip["layers"].append({
+                "type": "video",
+                "path": trans_path,
+                "start": 0.0,  # Bắt đầu ngay từ đầu gap
+                "stop": gap_s,  # Chạy hết gap
+                "cutFrom": pre_s,  # Tiếp tục từ sau phần pre_s
+                "cutTo": pre_s + gap_s,  # Lấy gap_s giây tiếp theo
+                "resizeMode": "contain",
+                "mixVolume": 1
+            })
+
+            clips_json.append(gap_clip)
+            all_duration += gap_s
+
+        # TRANSITION ĐÈ VÀO ĐẦU CLIP SAU (nếu không phải clip đầu và cuối)
+        if not is_first and not is_last and trans_frames > 0:
+            # Xem clip tiếp theo
+            next_item = selected_clips[i + 1]
+            next_full = next_item["path"]
+            if not os.path.isabs(next_full):
+                next_full = os.path.join(MAIN_CLIPS_DIR, next_item["path"])
+            next_dur = float(next_item["duration"])
+
+            # Tạo clip tiếp theo trước để thêm transition
+            next_clip_obj = main_clip_layer(next_full, 0.0, next_dur)
+
+            # Tính phần transition còn lại
+            trans_remaining_s = trans_duration_s - pre_s - gap_s
+
+            if trans_remaining_s > 0:
+                next_clip_obj["layers"].append({
                     "type": "video",
                     "path": trans_path,
-                    "start": trans_start_in_clip,
-                    "stop": dur,  # chạy đến hết clip
-                    "cutFrom": 0.0,
-                    "cutTo": pre_s,
+                    "start": 0.0,  # Bắt đầu ngay từ đầu clip
+                    "stop": min(trans_remaining_s, next_dur),  # Chạy hết phần còn lại
+                    "cutFrom": pre_s + gap_s,  # Tiếp tục từ sau gap
+                    "cutTo": trans_duration_s,  # Đến hết transition
                     "resizeMode": "contain",
                     "mixVolume": 1
                 })
-                audioTracks.append({
-                    "path": trans_path,
-                    "mixVolume": 1,
-                    "cutFrom": 0.0,
-                    "cutTo": trans_duration_s,
-                    "start": trans_start_in_clip
-                })
-            clips_json.append(clip_obj)
 
-            # Thêm gap màu đen (nếu có và không phải clip cuối)
-            if gap_s > 0 and trans_frames > 0 and not is_last:
-                gap_clip = black_gap_clip(gap_s)
+            clips_json.append(next_clip_obj)
+            all_duration += next_dur
 
-                # Transition tiếp tục chạy trong gap
-                gap_clip["layers"].append({
-                    "type": "video",
-                    "path": trans_path,
-                    "start": 0.0,
-                    "stop": gap_s,
-                    "cutFrom": pre_s,
-                    "cutTo": pre_s + gap_s,
-                    "resizeMode": "contain",
-                    # "mixVolume": 1
-                })
+            # Skip clip tiếp theo vì đã xử lý
+            i += 1
 
-                clips_json.append(gap_clip)
-
-        else:
-            # Các clip sau: clip chơi bình thường, transition đè vào đầu
-            clip_obj = main_clip_layer(full, 0.0, dur)
-
-            # Tính phần transition còn lại sau gap
-            trans_remaining_s = trans_duration_s - pre_s - gap_s
-
-            # Transition phần còn lại đè vào đầu clip
-            if trans_remaining_s > 0:
-                clip_obj["layers"].append({
-                    "type": "video",
-                    "path": trans_path,
-                    "start": 0.0,
-                    "stop": min(trans_remaining_s, dur),
-                    "cutFrom": pre_s + gap_s,
-                    "cutTo": trans_duration_s,
-                    "resizeMode": "contain",
-                    # "mixVolume": 1
-                })
-            clips_json.append(clip_obj)
-
-            # Thêm gap cho clip tiếp theo (nếu không phải clip cuối)
-            if gap_s > 0 and trans_frames > 0 and not is_last:
-                gap_clip = black_gap_clip(gap_s)
-
-                # Transition mới cho cặp clip tiếp theo
-                gap_clip["layers"].append({
-                    "type": "video",
-                    "path": trans_path,
-                    "start": 0.0,
-                    "stop": gap_s,
-                    "cutFrom": pre_s,
-                    "cutTo": pre_s + gap_s,
-                    "resizeMode": "contain",
-                    # "mixVolume": 1
-                })
-
-                clips_json.append(gap_clip)
+    # Xử lý clip cuối cùng (nếu chưa được xử lý)
+    # if len(selected_clips) > 0:
+    #     last_item = selected_clips[-1]
+    #     last_full = last_item["path"]
+    #     if not os.path.isabs(last_full):
+    #         last_full = os.path.join(MAIN_CLIPS_DIR, last_item["path"])
+    #     last_dur = float(last_item["duration"])
+    #
+    #     last_clip_obj = main_clip_layer(last_full, 0.0, last_dur)
+    #
+    #     # Nếu có transition từ clip trước
+    #     if len(selected_clips) > 1 and trans_frames > 0:
+    #         trans_remaining_s = trans_duration_s - pre_s - gap_s
+    #
+    #         if trans_remaining_s > 0:
+    #             last_clip_obj["layers"].append({
+    #                 "type": "video",
+    #                 "path": trans_path,
+    #                 "start": 0.0,
+    #                 "stop": min(trans_remaining_s, last_dur),
+    #                 "cutFrom": pre_s + gap_s,
+    #                 "cutTo": trans_duration_s,
+    #                 "resizeMode": "contain",
+    #                 "mixVolume": 1
+    #             })
+    #
+    #     clips_json.append(last_clip_obj)
 
     output_file_name = f"{channel_name}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4"
     spec = {
         "outPath": os.path.join(output_path, output_file_name),
-        # "fast": "true",
         "width": width,
         "height": height,
         "fps": fps,
@@ -848,3 +1027,14 @@ def load_used_videos(channel_name):
             return []
     except Exception:
         return []
+def open_file_cross_platform(path):
+    system = platform.system()
+    try:
+        if system == "Windows":
+            os.startfile(path)
+        elif system == "Darwin":  # macOS
+            subprocess.Popen(["open", path])
+        else:  # Linux, Ubuntu, v.v.
+            subprocess.Popen(["xdg-open", path])
+    except Exception as e:
+        print(f"Lỗi khi mở file: {e}")
