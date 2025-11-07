@@ -174,7 +174,7 @@ class ChannelSelectorApp(TkinterDnD.Tk):
                     "path": clip["path"],
                     "duration": duration,
                     "thumb_path": thumb_path,
-                    "var": tk.BooleanVar(value=False)
+                    "var": tk.BooleanVar(value=True)
                 })
 
         editor._redraw_media_bin()

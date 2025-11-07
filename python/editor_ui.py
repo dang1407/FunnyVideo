@@ -131,18 +131,30 @@ class EditorWindow(tk.Toplevel):
         self.media_canvas.pack(side="left", fill="both", expand=True)
         self.media_canvas.create_window((0, 0), window=self.media_items_frame, anchor="nw")
 
+        def _on_mousewheel(event):
+            self.media_canvas.yview_scroll(-1 * int(event.delta / 120), "units")
+
+        # Windows
+        self.media_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # macOS (dùng delta khác)
+        self.media_canvas.bind_all("<Button-4>", lambda e: self.media_canvas.yview_scroll(-1, "units"))
+        self.media_canvas.bind_all("<Button-5>", lambda e: self.media_canvas.yview_scroll(1, "units"))
+
         def on_frame_configure(event): self.media_canvas.configure(scrollregion=self.media_canvas.bbox("all"))
 
         self.media_items_frame.bind("<Configure>", on_frame_configure)
 
-        add_to_timeline_button = ttk.Button(media_container, text="Thêm các clip đã chọn vào Timeline ↓",
-                                            command=self._add_selected_to_timeline)
-        add_to_timeline_button.pack(side="top", padx=5, pady=5)
+        # add_to_timeline_button = ttk.Button(media_container, text="Thêm các clip đã chọn vào Timeline ↓",
+        #                                     command=self._add_selected_to_timeline)
+        # add_to_timeline_button.pack(side="top", padx=5, pady=5)
 
         render_video_btn = ttk.Button(media_container, text="Render Video",
                                             command=self._render_video)
-        render_video_btn.pack(side="top", padx=20, pady=20)
+        render_video_btn.pack(side="top", padx=5, pady=20)
 
+        self.duration_label = ttk.Label(media_container, text="Duration: 0 (s)")
+        self.duration_label.pack(side="top", padx=5, pady=30)
     def _redraw_media_bin(self):
         """Vẽ lại toàn bộ danh sách media clip."""
         # Xóa các widget cũ để vẽ lại
@@ -151,9 +163,16 @@ class EditorWindow(tk.Toplevel):
 
         self._image_references = []  # Giữ tham chiếu ảnh
         number_selected_clips = 0
+        total_selected_duration = 0
         for i, clip in enumerate(self.imported_clips):
             if clip["var"].get():
                 number_selected_clips += 1
+                try:
+                    clip_dur = float(clip["duration"])
+                    total_selected_duration += clip_dur
+                except:
+                    total_selected_duration += 0
+        self.duration_label.config(text=f"Duration = {total_selected_duration} (s)")
 
         for i, clip in enumerate(self.imported_clips):
             # Frame chính cho mỗi item
@@ -276,7 +295,11 @@ class EditorWindow(tk.Toplevel):
 
     def _render_video(self):
         config = load_channel_config(self.channel_name)
-        build_editly_config(self.channel_name, config=config, selected_clips=self.timeline_clips, output_path=OUT_DIR / self.channel_name)
+        clip_to_render = []
+        for clip in self.imported_clips:
+            if clip["var"].get():
+                clip_to_render.append(clip)
+        build_editly_config(self.channel_name, config=config, selected_clips=clip_to_render, output_path=OUT_DIR / self.channel_name)
         # Thêm các clip đã dùng vào used_jsons
         used_videos_path = get_used_videos_path(self.channel_name)
         save_used_videos(self.timeline_clips, used_videos_path)
@@ -810,6 +833,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     if not selected_clips:
         raise RuntimeError("Không chọn được clip nào!")
     all_duration = 0
+    skip_index = -1
     # Xử lý từng clip
     for i, item in enumerate(selected_clips):
         full = item["path"]
@@ -819,7 +843,8 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
 
         is_first = (i == 0)
         is_last = (i == len(selected_clips) - 1)
-
+        if i == skip_index:
+            continue
         # Tạo clip chính (luôn chơi toàn bộ duration)
         clip_obj = main_clip_layer(full, 0.0, dur)
 
@@ -847,7 +872,18 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
                 "cutTo": trans_duration_s,
                 "start": all_duration + trans_start_in_clip  # Thời điểm trong toàn video
             })
-
+        if is_last and trans_frames > 0:
+            clip_obj["layers"].append({
+                "type": "video",
+                "path": trans_path,
+                "start": 0.0,  # Bắt đầu ngay từ đầu clip
+                "stop": min(trans_remaining_s, dur),  # Chạy hết phần còn lại
+                "cutFrom": pre_s + gap_s,  # Tiếp tục từ sau gap
+                "cutTo": trans_duration_s,  # Đến hết transition
+                "resizeMode": "contain",
+                "mixVolume": 1
+            })
+            all_duration += trans_duration_s - pre_s - gap_s
         clips_json.append(clip_obj)
         all_duration += dur
 
@@ -896,13 +932,64 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
                     "resizeMode": "contain",
                     "mixVolume": 1
                 })
+            if trans_frames > 0 and not i + 1 == len(selected_clips) - 1:
+                # Transition bắt đầu từ pre_s giây trước khi clip kết thúc
+                trans_start_in_clip = next_dur - pre_s
 
+                next_clip_obj["layers"].append({
+                    "type": "video",
+                    "path": trans_path,
+                    "start": trans_start_in_clip,  # Bắt đầu trong clip này
+                    "stop": next_dur,  # Kết thúc khi clip này kết thúc
+                    "cutFrom": 0.0,
+                    "cutTo": pre_s,  # Lấy pre_s giây đầu của transition
+                    "resizeMode": "contain",
+                    "mixVolume": 1
+                })
+
+                # Audio của transition (tính theo all_duration để đồng bộ toàn video)
+                audioTracks.append({
+                    "path": trans_path,
+                    "mixVolume": 1,
+                    "cutFrom": 0.0,
+                    "cutTo": trans_duration_s,
+                    "start": all_duration + trans_start_in_clip  # Thời điểm trong toàn video
+                })
+
+                if gap_s > 0 and trans_frames > 0 and not is_last:
+                    gap_clip = black_gap_clip(gap_s)
+
+                    # Transition tiếp tục chạy trong gap
+                    gap_clip["layers"].append({
+                        "type": "video",
+                        "path": trans_path,
+                        "start": 0.0,  # Bắt đầu ngay từ đầu gap
+                        "stop": gap_s,  # Chạy hết gap
+                        "cutFrom": pre_s,  # Tiếp tục từ sau phần pre_s
+                        "cutTo": pre_s + gap_s,  # Lấy gap_s giây tiếp theo
+                        "resizeMode": "contain",
+                        "mixVolume": 1
+                    })
+
+                    clips_json.append(gap_clip)
+                    all_duration += gap_s
+
+                next_clip_obj["layers"].append({
+                    "type": "video",
+                    "path": trans_path,
+                    "start": 0.0,  # Bắt đầu ngay từ đầu clip
+                    "stop": min(trans_remaining_s, next_dur),  # Chạy hết phần còn lại
+                    "cutFrom": pre_s + gap_s,  # Tiếp tục từ sau gap
+                    "cutTo": trans_duration_s,  # Đến hết transition
+                    "resizeMode": "contain",
+                    "mixVolume": 1
+                })
+                all_duration += trans_duration_s - pre_s - gap_s
             clips_json.append(next_clip_obj)
             all_duration += next_dur
 
             # Skip clip tiếp theo vì đã xử lý
-            i += 1
-
+            skip_index = i + 1
     # Xử lý clip cuối cùng (nếu chưa được xử lý)
     # if len(selected_clips) > 0:
     #     last_item = selected_clips[-1]
@@ -955,17 +1042,23 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     print(f"✅ Đã lưu cấu hình editly: {config_path}")
 
     # Render video bằng editly CLI
+    start_render(config_path)
+
+    return spec
+def render_video(config_path):
     try:
         subprocess.run(["editly", config_path], check=True, shell=True)
-        print(f"🎬 Video đã được render: {spec['outPath']}")
-        # Xóa file config
+        messagebox.showinfo("Hoàn tất", f"Render video thành công 🎉")
         # os.remove(config_path)
     except subprocess.CalledProcessError as e:
         print(f"❌ Lỗi khi render video bằng editly: {e}")
     except FileNotFoundError:
         print("⚠️ Lệnh 'editly' chưa được cài đặt hoặc không có trong PATH!")
 
-    return spec
+def start_render(config_path):
+    # Tạo luồng riêng để không làm treo UI
+    thread = threading.Thread(target=render_video, args=(config_path,))
+    thread.start()
 def load_channel_config(channel_name):
     """Đọc config.json trong thư mục kênh"""
     print(f"🔍 Đang tải cấu hình cho kênh: {channel_name}")
