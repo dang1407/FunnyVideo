@@ -177,7 +177,7 @@ class ChannelSelectorApp(TkinterDnD.Tk):
                     "var": tk.BooleanVar(value=True)
                 })
 
-        editor._redraw_media_bin()
+        editor.render_clip_list()
 
     def _create_new_channel(self):
         dialog = ChannelCreationDialog(self, "Tạo kênh mới", self.initial_config_template)

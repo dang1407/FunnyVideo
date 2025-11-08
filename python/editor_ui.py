@@ -12,7 +12,15 @@ import threading
 import datetime
 from typing import Optional
 from python.clip_selector import save_used_videos
+from DragSortHelper import DDList, Item, ClipItem
 import time
+try:
+    from Tkinter import Tk, IntVar, Label, Entry, Button
+    import tkMessageBox as messagebox
+    from Tkconstants import *
+except ImportError:
+    from tkinter import Tk, IntVar, Label, Entry, Button, messagebox
+    from tkinter.constants import *
 
 # --- Hằng số và đường dẫn ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -22,12 +30,6 @@ PIXELS_PER_SECOND = 50  # Giữ lại để vẽ timeline
 CHANNELS_DIR = PROJECT_ROOT / "Channels"
 MAIN_CLIPS_DIR = os.path.join(PROJECT_ROOT, "Main_clips")
 OUT_DIR = PROJECT_ROOT / "Output"
-def format_time(seconds):
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
-
 
 def get_video_info(file_path):
     """Lấy thời lượng và tạo thumbnail cho video."""
@@ -74,6 +76,7 @@ class EditorWindow(tk.Toplevel):
 
         self.imported_clips = []  # List các dictionary chứa thông tin clip
         self.timeline_clips = []
+        self._image_references = []
         self.drag_source_index = None  # Lưu vị trí clip đang được kéo
         # --- Thêm cho phát video ---
         self.current_player = None  # Thread phát video
@@ -155,7 +158,7 @@ class EditorWindow(tk.Toplevel):
 
         self.duration_label = ttk.Label(media_container, text="Duration: 0 (s)")
         self.duration_label.pack(side="top", padx=5, pady=30)
-    def _redraw_media_bin(self):
+    def _raw_media_bin(self):
         """Vẽ lại toàn bộ danh sách media clip."""
         # Xóa các widget cũ để vẽ lại
         for widget in self.media_items_frame.winfo_children():
@@ -174,6 +177,9 @@ class EditorWindow(tk.Toplevel):
                     total_selected_duration += 0
         self.duration_label.config(text=f"Duration = {total_selected_duration} (s)")
 
+        sortable_list = DDList(self.media_items_frame, 200, 100, offset_x=10, offset_y=10, gap=10, item_borderwidth=1,
+                               item_relief="groove")
+        sortable_list.pack(expand=True, fill=BOTH)
         for i, clip in enumerate(self.imported_clips):
             # Frame chính cho mỗi item
             item_frame = ttk.Frame(self.media_items_frame, padding=5, relief="groove", borderwidth=1)
@@ -206,7 +212,7 @@ class EditorWindow(tk.Toplevel):
             check.configure(command=lambda clip_index = i: self.toggle_select_clip(clip_index))
 
             # Thông tin
-            info_text = f"{os.path.basename(clip['path'])}\n[{format_time(clip['duration'])}]"
+            info_text = f"{os.path.basename(clip['path'])}\n[{self.format_time(clip['duration'])}]"
             info_label = ttk.Label(item_frame, text=info_text, justify="left", font=("Arial", 8))
             info_label.pack(side="left", fill="x", expand=True, padx=5)
 
@@ -222,6 +228,34 @@ class EditorWindow(tk.Toplevel):
                 go_to_bottom_btn = ttk.Button(item_frame, text="⬇", width=4)
                 go_to_bottom_btn.pack(side="right", padx=5)
                 go_to_bottom_btn.configure(command=lambda clip_index=i: self.change_clip_index_by_offset(clip_index, -1))
+
+    def render_clip_list(self):
+        total_selected_duration = 0
+        for i, clip in enumerate(self.imported_clips):
+            if clip["var"].get():
+                try:
+                    clip_dur = float(clip["duration"])
+                    total_selected_duration += clip_dur
+                except:
+                    total_selected_duration += 0
+        self.duration_label.config(text=f"Duration: {total_selected_duration} (s)")
+        for child in self.media_items_frame.winfo_children():
+            child.destroy()
+
+        def on_reorder(new_order):
+            """Callback khi reorder -> cập nhật self.imported_clips"""
+            self.imported_clips = new_order
+
+        ddlist = DDList(self.media_items_frame, item_width=600, item_height=80, item_relief="groove",
+                        item_borderwidth=1, item_background="#2f2f2f", offset_x=5, offset_y=5, gap=5,
+                        reorder_callback=on_reorder)
+        ddlist.pack(fill="both", expand=True)
+
+        for clip in self.imported_clips:
+            item = ClipItem(ddlist, clip, 600, 80, self)
+            ddlist.add_item(item)
+
+        self.ddlist = ddlist
     # --- CÁC HÀM XỬ LÝ SỰ KIỆN ---
     def _import_clips_from_dialog(self):
         initial_dir = PROJECT_ROOT / "Main_clips"
@@ -251,7 +285,7 @@ class EditorWindow(tk.Toplevel):
                     })
                     newly_added = True
 
-        if newly_added: self._redraw_media_bin()
+        if newly_added: self._raw_media_bin()
 
     # def _on_drag_start(self, event):
     #     """Khi bắt đầu kéo một item."""
@@ -367,300 +401,6 @@ class EditorWindow(tk.Toplevel):
             print(f"Lỗi khi lấy duration của {video_path}: {e}")
             return 0
 
-    def _show_render_progress_with_gpu(self, config_path, output_args, gpu_type):
-        """Hiển thị cửa sổ tiến trình render với GPU"""
-        """Hiển thị cửa sổ tiến trình render"""
-        # Tạo cửa sổ mới
-        progress_window = tk.Toplevel(self)
-        progress_window.title("Đang render video...")
-        progress_window.geometry("600x400")
-        progress_window.resizable(False, False)
-        
-        # Center window
-        progress_window.update_idletasks()
-        x = (progress_window.winfo_screenwidth() // 2) - (600 // 2)
-        y = (progress_window.winfo_screenheight() // 2) - (400 // 2)
-        progress_window.geometry(f"600x400+{x}+{y}")
-        
-        # Thông tin GPU
-        info_frame = ttk.Frame(progress_window, padding="10")
-        info_frame.pack(fill=tk.X)
-        
-        ttk.Label(info_frame, text=f"GPU: {gpu_type.upper()}", 
-                font=("Arial", 10, "bold")).pack(anchor=tk.W)
-        ttk.Label(info_frame, text=f"Config: {config_path}", 
-                font=("Arial", 8)).pack(anchor=tk.W)
-        
-        # Progress bar
-        progress_frame = ttk.Frame(progress_window, padding="10")
-        progress_frame.pack(fill=tk.X)
-        
-        progress_label = ttk.Label(progress_frame, text="Đang khởi động...", 
-                                font=("Arial", 9))
-        progress_label.pack(anchor=tk.W, pady=(0, 5))
-        
-        progress_bar = ttk.Progressbar(progress_frame, mode='indeterminate', length=560)
-        progress_bar.pack(fill=tk.X)
-        progress_bar.start(10)
-        
-        # Text widget để hiển thị log
-        log_frame = ttk.Frame(progress_window, padding="10")
-        log_frame.pack(fill=tk.BOTH, expand=True)
-        
-        ttk.Label(log_frame, text="Chi tiết:", font=("Arial", 9, "bold")).pack(anchor=tk.W)
-        
-        log_text = tk.Text(log_frame, wrap=tk.WORD, height=15, 
-                        font=("Consolas", 8), bg="#1e1e1e", fg="#d4d4d4")
-        log_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
-        
-        scrollbar = ttk.Scrollbar(log_text, command=log_text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        log_text.config(yscrollcommand=scrollbar.set)
-        
-        # Button cancel
-        button_frame = ttk.Frame(progress_window, padding="10")
-        button_frame.pack(fill=tk.X)
-        
-        cancel_button = ttk.Button(button_frame, text="Hủy", 
-                                command=lambda: self._cancel_render(progress_window))
-        cancel_button.pack(side=tk.RIGHT)
-            
-        # Chạy render trong thread riêng
-        self.render_cancelled = False
-        render_thread = threading.Thread(
-            target=self._run_render_process_gpu,
-            args=(config_path, output_args, progress_label, progress_bar, 
-                log_text, progress_window, gpu_type),
-            daemon=True
-        )
-        render_thread.start()
-
-    def _run_render_process_gpu(self, config_path, output_args, progress_label, 
-                                progress_bar, log_text, progress_window, gpu_type):
-        """Chạy process render với GPU"""
-        try:
-            import re
-            
-            # Đọc config để lấy outPath
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            
-            output_path = config['outPath']
-            temp_output = output_path.replace('.mp4', '_temp.mp4')
-            
-            # Bước 1: Render với editly (không nén, fast)
-            log_text.insert(tk.END, "=== BƯỚC 1: Render với Editly ===\n")
-            log_text.see(tk.END)
-            log_text.update()
-            
-            # Sửa config để output ra file temp
-            config['outPath'] = temp_output
-            config['fast'] = True  # Fast mode để nhanh
-            
-            temp_config_path = config_path.replace('.json', '_temp.json')
-            with open(temp_config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=4, ensure_ascii=False)
-            
-            process1 = subprocess.Popen(
-                ["editly", temp_config_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1,
-                shell=True
-            )
-            
-            self.render_process = process1
-            
-            for line in process1.stdout:
-                if self.render_cancelled:
-                    process1.terminate()
-                    return
-                
-                log_text.insert(tk.END, line)
-                log_text.see(tk.END)
-                log_text.update()
-                
-                # Parse progress
-                if "clip" in line.lower():
-                    match = re.search(r'clip\s+(\d+)/(\d+)', line, re.IGNORECASE)
-                    if match:
-                        current = int(match.group(1))
-                        total = int(match.group(2))
-                        percent = (current / total) * 50  # 50% cho bước 1
-                        
-                        progress_label.config(text=f"Bước 1/2: Rendering clip {current}/{total}")
-                        progress_bar.stop()
-                        progress_bar.config(mode='determinate', value=percent)
-                        progress_label.update()
-                        progress_bar.update()
-            
-            return_code1 = process1.wait()
-            if return_code1 != 0:
-                raise Exception("Editly render failed")
-            
-            # Bước 2: Encode lại với GPU
-            log_text.insert(tk.END, "\n=== BƯỚC 2: Encode với GPU ===\n")
-            log_text.see(tk.END)
-            log_text.update()
-            
-            progress_label.config(text=f"Bước 2/2: Encoding với {gpu_type.upper()}")
-            progress_bar.config(value=50)
-            progress_label.update()
-            progress_bar.update()
-            
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-i", temp_output,
-                "-progress", "pipe:1",  # Output progress
-                "-y"  # Overwrite
-            ] + output_args + [output_path]
-            
-            log_text.insert(tk.END, f"Command: {' '.join(ffmpeg_cmd)}\n\n")
-            log_text.see(tk.END)
-            log_text.update()
-            
-            process2 = subprocess.Popen(
-                ffmpeg_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1
-            )
-            
-            self.render_process = process2
-            
-            # Parse ffmpeg progress
-            duration = None
-            for line in process2.stdout:
-                if self.render_cancelled:
-                    process2.terminate()
-                    return
-                
-                log_text.insert(tk.END, line)
-                log_text.see(tk.END)
-                log_text.update()
-                
-                # Lấy duration
-                if "Duration:" in line:
-                    match = re.search(r'Duration: (\d{2}):(\d{2}):(\d{2})', line)
-                    if match:
-                        h, m, s = map(int, match.groups())
-                        duration = h * 3600 + m * 60 + s
-                
-                # Lấy progress
-                if "time=" in line and duration:
-                    match = re.search(r'time=(\d{2}):(\d{2}):(\d{2})', line)
-                    if match:
-                        h, m, s = map(int, match.groups())
-                        current_time = h * 3600 + m * 60 + s
-                        percent = 50 + (current_time / duration) * 50  # 50-100%
-                        
-                        progress_label.config(text=f"Encoding với {gpu_type.upper()}: {percent-50:.1f}%")
-                        progress_bar.config(value=percent)
-                        progress_label.update()
-                        progress_bar.update()
-            
-            return_code2 = process2.wait()
-            
-            # Xóa file temp
-            # if os.path.exists(temp_output):
-            #     os.remove(temp_output)
-            # if os.path.exists(temp_config_path):
-            #     os.remove(temp_config_path)
-            
-            if self.render_cancelled:
-                progress_label.config(text="Đã hủy render")
-                log_text.insert(tk.END, "\n\n=== Đã hủy render ===\n")
-                messagebox.showwarning("Đã hủy", "Đã hủy render video")
-            elif return_code2 == 0:
-                progress_bar.config(value=100)
-                progress_label.config(text="Hoàn tất! ✓")
-                log_text.insert(tk.END, "\n\n=== Render thành công với GPU! ===\n")
-                messagebox.showinfo("Hoàn tất", f"Render video thành công 🎉\nGPU: {gpu_type.upper()}")
-                progress_window.destroy()
-            else:
-                raise Exception("FFmpeg encoding failed")
-                
-        except Exception as e:
-            log_text.insert(tk.END, f"\n\n=== LỖI: {str(e)} ===\n")
-            messagebox.showerror("Lỗi", f"Lỗi: {str(e)}")
-
-    def _play_video_in_tkinter(self, video_path):
-        """Phát video trong một Label của Tkinter"""
-        if self.current_player and self.current_player.is_alive():
-            self.is_playing = False
-            self.current_player.join(timeout=1)
-
-        self.is_playing = True
-        self.current_video_path = video_path
-        self.current_player = threading.Thread(target=self._video_player_loop, args=(video_path,), daemon=True)
-        self.current_player.start()
-
-    def _video_player_loop(self, video_path):
-        """Vòng lặp phát video bằng OpenCV + hiển thị trong Tkinter"""
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            self.after(0, lambda: messagebox.showerror("Lỗi", "Không thể mở video!"))
-            return
-
-        self.current_cap = cap
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        delay = int(1000 / fps) if fps > 0 else 33
-
-        while self.is_playing and cap.isOpened():
-            if not self.is_playing:
-                break
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            # Resize frame để vừa với khu vực xem trước (ví dụ: 640x360)
-            frame = cv2.resize(frame, (640, 360))
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            photo = ImageTk.PhotoImage(img)
-
-            # Cập nhật giao diện trong main thread
-            self.after(0, self._update_video_frame, photo)
-
-            time.sleep(max(1, delay) / 1000)  # Giữ frame rate
-
-        cap.release()
-        self.current_cap = None
-        self.is_playing = False
-        self.after(0, self._clear_video_preview)
-
-    def _update_video_frame(self, photo):
-        if self.current_frame_label:
-            self.current_frame_label.configure(image=photo)
-            self.current_frame_label.image = photo  # Giữ tham chiếu
-
-    def _clear_video_preview(self):
-        if self.current_frame_label:
-            self.current_frame_label.configure(image='')
-            self.current_frame_label.image = None
-        if self.play_button:
-            self.play_button.configure(text="▶ Play")
-
-    def _toggle_play_pause(self, video_path, button):
-        if self.current_video_path != video_path:
-            # Bắt đầu video mới
-            self._stop_current_video()
-            self._play_video_in_tkinter(video_path)
-            button.configure(text="⏸ Pause")
-            self.play_button = button
-        else:
-            # Đang phát → tạm dừng / tiếp tục
-            if self.is_playing:
-                self.is_playing = False
-                button.configure(text="▶ Play")
-            else:
-                self.is_playing = True
-                button.configure(text="⏸ Pause")
-                self.current_player = threading.Thread(target=self._video_player_loop, args=(video_path,), daemon=True)
-                self.current_player.start()
-
     def _stop_current_video(self):
         self.is_playing = False
         if self.current_cap:
@@ -677,18 +417,18 @@ class EditorWindow(tk.Toplevel):
         else:
             messagebox.showinfo("Thông báo", "Chưa chọn video nào để mở.")
     def toggle_select_clip(self, current_clip_index):
-        temp_clips = []
-        for index, clip in enumerate(self.imported_clips):
-            if clip["var"].get():
-                temp_clips.append(clip)
-        for index, clip in enumerate(self.imported_clips):
-            if not clip["var"].get() and index == current_clip_index:
-                temp_clips.append(clip)
-        for index, clip in enumerate(self.imported_clips):
-            if not clip["var"].get() and not index == current_clip_index:
-                temp_clips.append(clip)
-        self.imported_clips = temp_clips
-        self._redraw_media_bin()
+        self.render_clip_list()
+        # for index, clip in enumerate(self.imported_clips):
+        #     if clip["var"].get():
+        #         temp_clips.append(clip)
+        # for index, clip in enumerate(self.imported_clips):
+        #     if not clip["var"].get() and index == current_clip_index:
+        #         temp_clips.append(clip)
+        # for index, clip in enumerate(self.imported_clips):
+        #     if not clip["var"].get() and not index == current_clip_index:
+        #         temp_clips.append(clip)
+        # self.imported_clips = temp_clips
+        # self._raw_media_bin()
     def change_clip_index_by_offset(self, current_clip_index, offset):
         temp_clips = []
         number_clips = len(self.imported_clips)
@@ -706,7 +446,13 @@ class EditorWindow(tk.Toplevel):
             if index > current_clip_index - offset and index != current_clip_index:
                 temp_clips.append(clip)
         self.imported_clips = temp_clips
-        self._redraw_media_bin()
+        self._raw_media_bin()
+
+    def format_time(self, seconds):
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
 def probe_duration_sec(video_path):
     """Dùng ffprobe để lấy thời lượng clip (giây)"""
     try:
@@ -873,6 +619,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
                 "start": all_duration + trans_start_in_clip  # Thời điểm trong toàn video
             })
         if is_last and trans_frames > 0:
+            trans_remaining_s = trans_duration_s - pre_s - gap_s
             clip_obj["layers"].append({
                 "type": "video",
                 "path": trans_path,
@@ -1027,7 +774,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
         "keepSourceAudio": True,
         "defaults": {"transition": None},
         "clips": clips_json,
-        "audioTracks": audioTracks
+        "audio_tracks": audioTracks
     }
 
     # Lưu file JSON và render video
@@ -1042,22 +789,22 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     print(f"✅ Đã lưu cấu hình editly: {config_path}")
 
     # Render video bằng editly CLI
-    start_render(config_path)
-
+    start_render(config_path, selected_clips)
     return spec
-def render_video(config_path):
+def render_video(config_path, selected_clips):
     try:
         subprocess.run(["editly", config_path], check=True, shell=True)
         messagebox.showinfo("Hoàn tất", f"Render video thành công 🎉")
         # os.remove(config_path)
+        save_used_videos(selected_clips)
     except subprocess.CalledProcessError as e:
         print(f"❌ Lỗi khi render video bằng editly: {e}")
     except FileNotFoundError:
         print("⚠️ Lệnh 'editly' chưa được cài đặt hoặc không có trong PATH!")
 
-def start_render(config_path):
+def start_render(config_path, selected_clips):
     # Tạo luồng riêng để không làm treo UI
-    thread = threading.Thread(target=render_video, args=(config_path,))
+    thread = threading.Thread(target=render_video, args=(config_path,selected_clips))
     thread.start()
 def load_channel_config(channel_name):
     """Đọc config.json trong thư mục kênh"""
