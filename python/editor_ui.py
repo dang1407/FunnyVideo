@@ -484,18 +484,9 @@ def tc_to_seconds(tc: str, fps: int) -> float:
 
 
 def build_editly_config(channel_name: str, config: dict, selected_clips: list, output_path: str) -> dict:
-    """
-    selected_clips: list các dict từ clip_selector, mỗi item có:
-      { "filename": "...", "path": "Full/Hoặc/Relative", "duration": float }
-    config: đọc từ config.json của kênh, gồm:
-      logo.png, transition.mov (tuỳ chọn), preoverlap, gap, blur, fps
+    import os, json, datetime
+    from typing import Optional
 
-    Logic transition mới:
-    - Transition bắt đầu đè vào pre_f frames cuối clip trước
-    - Có gap màu đen giữa 2 clips
-    - Transition chạy liên tục, không bị gián đoạn
-    - Phần sau của transition đè vào đầu clip sau
-    """
     width, height = 1920, 1080
     fps = int(config.get("fps", 30))
     gap_tc = config.get("gap", "00:00:00:00")
@@ -503,17 +494,17 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     logo_file = config.get("logo", "logo.png")
     trans_file = config.get("transition", "transition.mov")
     blur_conf_str = config.get("blur", 1)
-    blur_conf = 0
     try:
         blur_conf = float(blur_conf_str)
     except:
-        blur_conf = 0
+        blur_conf = 0.0
+
     channel_dir = os.path.join(CHANNELS_DIR, channel_name)
     logo_path = os.path.join(channel_dir, logo_file)
     if not os.path.exists(logo_path):
         raise FileNotFoundError(f"Không thấy logo: {logo_path} (yêu cầu logo.png trong thư mục kênh)")
 
-    # Kiểm tra transition có tồn tại không
+    # Transition
     trans_frames = 0
     trans_duration_s = 0.0
     trans_path = None
@@ -527,13 +518,12 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
 
     gap_s = tc_to_seconds(gap_tc, fps) if gap_tc else 0.0
     pre_f = tc_to_frames(pre_tc, fps) if pre_tc else 0
-    pre_s = pre_f / fps  # chuyển pre_f sang giây
+    pre_s = pre_f / fps
 
     clips_json = []
     audio_tracks = []
 
     def main_clip_layer(full_path: str, cut_from: float = 0.0, cut_to: Optional[float] = None):
-        """Layer clip chính + overlay logo.png (full frame 1920x1080 trong suốt)"""
         v_layer = {
             "type": "video",
             "path": full_path,
@@ -547,7 +537,6 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
         if cut_to and cut_to > 0:
             v_layer["cutTo"] = cut_to
 
-        # Logo phủ toàn màn hình (PNG trong suốt 1920x1080)
         logo_layer = {
             "type": "image-overlay",
             "path": logo_path,
@@ -558,213 +547,107 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
         return {"layers": [v_layer, logo_layer]}
 
     def black_gap_clip(duration_s: float):
-        """Tạo clip gap màu đen"""
         return {
             "duration": duration_s,
             "layers": [
-                {
-                    "type": "fill-color",
-                    "color": "#000000"
-                },
-                {
-                    "type": "image-overlay",
-                    "path": logo_path,
-                    "position": "center",
-                    "width": 1.0
-                }
+                {"type": "fill-color", "color": "#000000"},
+                {"type": "image-overlay", "path": logo_path, "position": "center", "width": 1.0}
             ]
         }
 
-    # Kiểm tra nếu không có clip nào được chọn
     if not selected_clips:
         raise RuntimeError("Không chọn được clip nào!")
-    all_duration = 0
-    skip_index = -1
-    # Xử lý từng clip
-    for i, item in enumerate(selected_clips):
-        full = item["path"]
-        if not os.path.isabs(full):
-            full = os.path.join(MAIN_CLIPS_DIR, item["path"])
-        dur = float(item["duration"])
 
-        is_first = (i == 0)
-        is_last = (i == len(selected_clips) - 1)
-        if i == skip_index:
-            continue
-        # Tạo clip chính (luôn chơi toàn bộ duration)
-        clip_obj = main_clip_layer(full, 0.0, dur)
+    # --- MỚI: xử lý dễ hiểu, theo thứ tự timeline ---
+    all_duration = 0.0
 
-        # TRANSITION ĐÈ VÀO CUỐI CLIP (nếu không phải clip cuối)
-        if trans_frames > 0 and not is_last:
-            # Transition bắt đầu từ pre_s giây trước khi clip kết thúc
-            trans_start_in_clip = dur - pre_s
+    # Thêm clip đầu tiên (chưa có transition trước nó)
+    first = selected_clips[0]
+    first_full = first["path"] if os.path.isabs(first["path"]) else os.path.join(MAIN_CLIPS_DIR, first["path"])
+    first_dur = float(first["duration"])
+    first_clip_obj = main_clip_layer(first_full, 0.0, first_dur)
+    clips_json.append(first_clip_obj)
+    all_duration += first_dur
 
-            clip_obj["layers"].append({
+    # Duyệt qua từng transition giữa clip i (A) và clip i+1 (B)
+    for i in range(len(selected_clips) - 1):
+        A = selected_clips[i]
+        B = selected_clips[i + 1]
+
+        # Thông tin clip A (đã tồn tại là clips_json[-1])
+        clipA_path = A["path"] if os.path.isabs(A["path"]) else os.path.join(MAIN_CLIPS_DIR, A["path"])
+        clipA_dur = float(A["duration"])
+
+        # Thông tin clip B
+        clipB_path = B["path"] if os.path.isabs(B["path"]) else os.path.join(MAIN_CLIPS_DIR, B["path"])
+        clipB_dur = float(B["duration"])
+
+        # --- 1) Thêm layer transition phần "pre" vào clip A (đè cuối clip A) ---
+        if trans_frames > 0:
+            trans_pre_start_in_A = clipA_dur - pre_s
+            # append layer vào clip A (đã push trước đó)
+            clips_json[-1]["layers"].append({
                 "type": "video",
                 "path": trans_path,
-                "start": trans_start_in_clip,  # Bắt đầu trong clip này
-                "stop": dur,  # Kết thúc khi clip này kết thúc
+                "start": trans_pre_start_in_A,
+                "stop": clipA_dur,
                 "cutFrom": 0.0,
-                "cutTo": pre_s,  # Lấy pre_s giây đầu của transition
+                "cutTo": min(pre_s, trans_duration_s),
                 "resizeMode": "contain",
                 "mixVolume": 1
             })
 
-            # Audio của transition (tính theo all_duration để đồng bộ toàn video)
+            # Thêm audio track cho toàn bộ transition (bắt đầu tại thời điểm transition bắt đầu trên timeline)
             audio_tracks.append({
                 "path": trans_path,
                 "mixVolume": 1,
                 "cutFrom": 0.0,
                 "cutTo": trans_duration_s,
-                "start": all_duration + trans_start_in_clip  # Thời điểm trong toàn video
+                "start": all_duration - clipA_dur + trans_pre_start_in_A  # all_duration hiện tại là đã cộng clipA_dur
             })
-        if is_last and trans_frames > 0:
-            trans_remaining_s = trans_duration_s - pre_s - gap_s
-            clip_obj["layers"].append({
-                "type": "video",
-                "path": trans_path,
-                "start": 0.0,  # Bắt đầu ngay từ đầu clip
-                "stop": min(trans_remaining_s, dur),  # Chạy hết phần còn lại
-                "cutFrom": pre_s + gap_s,  # Tiếp tục từ sau gap
-                "cutTo": trans_duration_s,  # Đến hết transition
-                "resizeMode": "contain",
-                "mixVolume": 1
-            })
-            all_duration += trans_duration_s - pre_s - gap_s
-        clips_json.append(clip_obj)
-        all_duration += dur
 
-        # GAP MÀU ĐEN (nếu có và không phải clip cuối)
-        if gap_s > 0 and trans_frames > 0 and not is_last:
+        # --- 2) Gap đen (nếu có) ---
+        if gap_s > 0:
             gap_clip = black_gap_clip(gap_s)
-
-            # Transition tiếp tục chạy trong gap
-            gap_clip["layers"].append({
-                "type": "video",
-                "path": trans_path,
-                "start": 0.0,  # Bắt đầu ngay từ đầu gap
-                "stop": gap_s,  # Chạy hết gap
-                "cutFrom": pre_s,  # Tiếp tục từ sau phần pre_s
-                "cutTo": pre_s + gap_s,  # Lấy gap_s giây tiếp theo
-                "resizeMode": "contain",
-                "mixVolume": 1
-            })
-
+            if trans_frames > 0:
+                # transition phần giữa (sau pre_s)
+                gap_clip["layers"].append({
+                    "type": "video",
+                    "path": trans_path,
+                    "start": 0.0,           # chạy từ đầu đoạn gap trên transition file (cutted bằng cutFrom)
+                    "stop": gap_s,
+                    "cutFrom": min(pre_s, trans_duration_s),
+                    "cutTo": min(pre_s + gap_s, trans_duration_s),
+                    "resizeMode": "contain",
+                    "mixVolume": 1
+                })
             clips_json.append(gap_clip)
             all_duration += gap_s
 
-        # TRANSITION ĐÈ VÀO ĐẦU CLIP SAU (nếu không phải clip đầu và cuối)
-        if not is_first and not is_last and trans_frames > 0:
-            # Xem clip tiếp theo
-            next_item = selected_clips[i + 1]
-            next_full = next_item["path"]
-            if not os.path.isabs(next_full):
-                next_full = os.path.join(MAIN_CLIPS_DIR, next_item["path"])
-            next_dur = float(next_item["duration"])
+        # --- 3) Clip B với phần "post" transition đè lên đầu clip B ---
+        clipB_obj = main_clip_layer(clipB_path, 0.0, clipB_dur)
+        if trans_frames > 0:
+            post_s = max(0.0, trans_duration_s - pre_s - gap_s)
+            # phần đầu của clip B bị đè bởi phần còn lại của transition
+            clipB_obj["layers"].append({
+                "type": "video",
+                "path": trans_path,
+                "start": 0.0,
+                "stop": min(post_s, clipB_dur),
+                "cutFrom": min(pre_s + gap_s, trans_duration_s),
+                "cutTo": trans_duration_s,
+                "resizeMode": "contain",
+                "mixVolume": 1
+            })
+            # lưu ý: audio track đã thêm ở phần A (vì mình chèn 1 audioTracks cho toàn bộ transition),
+            # không cần thêm thêm audioTracks ở đây để tránh trùng.
 
-            # Tạo clip tiếp theo trước để thêm transition
-            next_clip_obj = main_clip_layer(next_full, 0.0, next_dur)
+        clips_json.append(clipB_obj)
+        all_duration += clipB_dur
 
-            # Tính phần transition còn lại
-            trans_remaining_s = trans_duration_s - pre_s - gap_s
+    # Nếu chỉ có 1 clip thì all_duration đã cộng ở trên; nếu nhiều clip thì all_duration đã cộng đủ.
 
-            if trans_remaining_s > 0:
-                next_clip_obj["layers"].append({
-                    "type": "video",
-                    "path": trans_path,
-                    "start": 0.0,  # Bắt đầu ngay từ đầu clip
-                    "stop": min(trans_remaining_s, next_dur),  # Chạy hết phần còn lại
-                    "cutFrom": pre_s + gap_s,  # Tiếp tục từ sau gap
-                    "cutTo": trans_duration_s,  # Đến hết transition
-                    "resizeMode": "contain",
-                    "mixVolume": 1
-                })
-            if trans_frames > 0 and not i + 1 == len(selected_clips) - 1:
-                # Transition bắt đầu từ pre_s giây trước khi clip kết thúc
-                trans_start_in_clip = next_dur - pre_s
-
-                next_clip_obj["layers"].append({
-                    "type": "video",
-                    "path": trans_path,
-                    "start": trans_start_in_clip,  # Bắt đầu trong clip này
-                    "stop": next_dur,  # Kết thúc khi clip này kết thúc
-                    "cutFrom": 0.0,
-                    "cutTo": pre_s,  # Lấy pre_s giây đầu của transition
-                    "resizeMode": "contain",
-                    "mixVolume": 1
-                })
-
-                # Audio của transition (tính theo all_duration để đồng bộ toàn video)
-                audio_tracks.append({
-                    "path": trans_path,
-                    "mixVolume": 1,
-                    "cutFrom": 0.0,
-                    "cutTo": trans_duration_s,
-                    "start": all_duration + trans_start_in_clip  # Thời điểm trong toàn video
-                })
-
-                if gap_s > 0 and trans_frames > 0 and not is_last:
-                    gap_clip = black_gap_clip(gap_s)
-
-                    # Transition tiếp tục chạy trong gap
-                    gap_clip["layers"].append({
-                        "type": "video",
-                        "path": trans_path,
-                        "start": 0.0,  # Bắt đầu ngay từ đầu gap
-                        "stop": gap_s,  # Chạy hết gap
-                        "cutFrom": pre_s,  # Tiếp tục từ sau phần pre_s
-                        "cutTo": pre_s + gap_s,  # Lấy gap_s giây tiếp theo
-                        "resizeMode": "contain",
-                        "mixVolume": 1
-                    })
-
-                    clips_json.append(gap_clip)
-                    all_duration += gap_s
-
-                next_clip_obj["layers"].append({
-                    "type": "video",
-                    "path": trans_path,
-                    "start": 0.0,  # Bắt đầu ngay từ đầu clip
-                    "stop": min(trans_remaining_s, next_dur),  # Chạy hết phần còn lại
-                    "cutFrom": pre_s + gap_s,  # Tiếp tục từ sau gap
-                    "cutTo": trans_duration_s,  # Đến hết transition
-                    "resizeMode": "contain",
-                    "mixVolume": 1
-                })
-                all_duration += trans_duration_s - pre_s - gap_s
-            clips_json.append(next_clip_obj)
-            all_duration += next_dur
-
-            # Skip clip tiếp theo vì đã xử lý
-            skip_index = i + 1
-    # Xử lý clip cuối cùng (nếu chưa được xử lý)
-    # if len(selected_clips) > 0:
-    #     last_item = selected_clips[-1]
-    #     last_full = last_item["path"]
-    #     if not os.path.isabs(last_full):
-    #         last_full = os.path.join(MAIN_CLIPS_DIR, last_item["path"])
-    #     last_dur = float(last_item["duration"])
-    #
-    #     last_clip_obj = main_clip_layer(last_full, 0.0, last_dur)
-    #
-    #     # Nếu có transition từ clip trước
-    #     if len(selected_clips) > 1 and trans_frames > 0:
-    #         trans_remaining_s = trans_duration_s - pre_s - gap_s
-    #
-    #         if trans_remaining_s > 0:
-    #             last_clip_obj["layers"].append({
-    #                 "type": "video",
-    #                 "path": trans_path,
-    #                 "start": 0.0,
-    #                 "stop": min(trans_remaining_s, last_dur),
-    #                 "cutFrom": pre_s + gap_s,
-    #                 "cutTo": trans_duration_s,
-    #                 "resizeMode": "contain",
-    #                 "mixVolume": 1
-    #             })
-    #
-    #     clips_json.append(last_clip_obj)
-
+    # Build spec
     output_file_name = f"{channel_name}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4"
     spec = {
         "outPath": os.path.join(output_path, output_file_name),
@@ -777,33 +660,36 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
         "audioTracks": audio_tracks
     }
 
-    # Lưu file JSON và render video
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
+    # Lưu file JSON
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else output_path, exist_ok=True)
+    temp_dir_for_channel = os.path.join(TEMP_DIR, channel_name)
+    os.makedirs(temp_dir_for_channel, exist_ok=True)
     config_filename = f"{channel_name}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
-    config_path = os.path.join(os.path.dirname(TEMP_DIR/channel_name), config_filename)
+    config_path = os.path.join(temp_dir_for_channel, config_filename)
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(spec, f, ensure_ascii=False, indent=2)
 
     print(f"✅ Đã lưu cấu hình editly: {config_path}")
 
-    # Render video bằng editly CLI
-    start_render(config_path)
+    # Gọi render
+    start_render(config_path, selected_clips, channel_name)
     return spec
-def render_video(config_path):
+
+def render_video(config_path, selected_clips, channel_name):
     try:
         subprocess.run(["editly", config_path], check=True, shell=True)
         messagebox.showinfo("Hoàn tất", f"Render video thành công 🎉")
         # os.remove(config_path)
+        save_used_videos(selected_clips, get_used_videos_path(channel_name))
     except subprocess.CalledProcessError as e:
         print(f"❌ Lỗi khi render video bằng editly: {e}")
     except FileNotFoundError:
         print("⚠️ Lệnh 'editly' chưa được cài đặt hoặc không có trong PATH!")
 
-def start_render(config_path):
+def start_render(config_path, selected_clips, channel_name):
     # Tạo luồng riêng để không làm treo UI
-    thread = threading.Thread(target=render_video, args=(config_path,))
+    thread = threading.Thread(target=render_video, args=(config_path,selected_clips,channel_name,))
     thread.start()
 def load_channel_config(channel_name):
     """Đọc config.json trong thư mục kênh"""
