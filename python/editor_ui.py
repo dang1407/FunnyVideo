@@ -530,7 +530,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     pre_s = pre_f / fps  # chuyển pre_f sang giây
 
     clips_json = []
-    audioTracks = []
+    audio_tracks = []
 
     def main_clip_layer(full_path: str, cut_from: float = 0.0, cut_to: Optional[float] = None):
         """Layer clip chính + overlay logo.png (full frame 1920x1080 trong suốt)"""
@@ -611,7 +611,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
             })
 
             # Audio của transition (tính theo all_duration để đồng bộ toàn video)
-            audioTracks.append({
+            audio_tracks.append({
                 "path": trans_path,
                 "mixVolume": 1,
                 "cutFrom": 0.0,
@@ -695,7 +695,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
                 })
 
                 # Audio của transition (tính theo all_duration để đồng bộ toàn video)
-                audioTracks.append({
+                audio_tracks.append({
                     "path": trans_path,
                     "mixVolume": 1,
                     "cutFrom": 0.0,
@@ -774,7 +774,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
         "keepSourceAudio": True,
         "defaults": {"transition": None},
         "clips": clips_json,
-        "audio_tracks": audioTracks
+        "audioTracks": audio_tracks
     }
 
     # Lưu file JSON và render video
@@ -789,22 +789,21 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     print(f"✅ Đã lưu cấu hình editly: {config_path}")
 
     # Render video bằng editly CLI
-    start_render(config_path, selected_clips)
+    start_render(config_path)
     return spec
-def render_video(config_path, selected_clips):
+def render_video(config_path):
     try:
         subprocess.run(["editly", config_path], check=True, shell=True)
         messagebox.showinfo("Hoàn tất", f"Render video thành công 🎉")
         # os.remove(config_path)
-        save_used_videos(selected_clips)
     except subprocess.CalledProcessError as e:
         print(f"❌ Lỗi khi render video bằng editly: {e}")
     except FileNotFoundError:
         print("⚠️ Lệnh 'editly' chưa được cài đặt hoặc không có trong PATH!")
 
-def start_render(config_path, selected_clips):
+def start_render(config_path):
     # Tạo luồng riêng để không làm treo UI
-    thread = threading.Thread(target=render_video, args=(config_path,selected_clips))
+    thread = threading.Thread(target=render_video, args=(config_path,))
     thread.start()
 def load_channel_config(channel_name):
     """Đọc config.json trong thư mục kênh"""
