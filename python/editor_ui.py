@@ -680,7 +680,7 @@ def render_video(config_path, selected_clips, channel_name):
     try:
         subprocess.run(["editly", config_path], check=True, shell=True)
         messagebox.showinfo("Hoàn tất", f"Render video thành công 🎉")
-        # os.remove(config_path)
+        os.remove(config_path)
         save_used_videos(selected_clips, get_used_videos_path(channel_name))
     except subprocess.CalledProcessError as e:
         print(f"❌ Lỗi khi render video bằng editly: {e}")
