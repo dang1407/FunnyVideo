@@ -1,7 +1,6 @@
 import tkinter as tk
 import platform
-from tkinter import ttk, filedialog, messagebox
-from pathlib import Path
+from tkinter import ttk, filedialog
 import os
 import cv2
 from PIL import Image, ImageTk
@@ -9,11 +8,11 @@ from tkinterdnd2 import DND_FILES
 import json
 import subprocess
 import threading
-import datetime
-from typing import Optional
-from python.clip_selector import save_used_videos
-from DragSortHelper import DDList, Item, ClipItem
-import time
+from python.clip_selector import save_used_videos, save_render_history
+from DragSortHelper import DDList, ClipItem
+from python.consts import *
+from python.helper import load_channel_path
+
 try:
     from Tkinter import Tk, IntVar, Label, Entry, Button
     import tkMessageBox as messagebox
@@ -23,48 +22,6 @@ except ImportError:
     from tkinter.constants import *
 
 # --- Hằng số và đường dẫn ---
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-TEMP_DIR = PROJECT_ROOT / "Temp"
-THUMBNAIL_SIZE = (160, 90)  # Kích thước thumbnail (rộng, cao)
-PIXELS_PER_SECOND = 50  # Giữ lại để vẽ timeline
-CHANNELS_DIR = PROJECT_ROOT / "Channels"
-MAIN_CLIPS_DIR = os.path.join(PROJECT_ROOT, "Main_clips")
-OUT_DIR = PROJECT_ROOT / "Output"
-
-def get_video_info(file_path):
-    """Lấy thời lượng và tạo thumbnail cho video."""
-    try:
-        video = cv2.VideoCapture(file_path)
-        if not video.isOpened(): return 0, None
-
-        # Lấy thời lượng
-        frame_count = video.get(cv2.CAP_PROP_FRAME_COUNT)
-        fps = video.get(cv2.CAP_PROP_FPS)
-        duration = frame_count / fps if fps > 0 else 0
-
-        # Tạo thumbnail từ khung hình đầu tiên
-        ret, frame = video.read()
-        thumb_path = None
-        if ret:
-            # Tạo thư mục Temp nếu chưa có
-            TEMP_DIR.mkdir(exist_ok=True)
-
-            # Chuyển đổi màu từ BGR (OpenCV) sang RGB (Pillow)
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            img.thumbnail(THUMBNAIL_SIZE)
-
-            # Lưu thumbnail
-            base_filename = os.path.basename(file_path)
-            thumb_filename = f"thumb_{base_filename}.png"
-            thumb_path = TEMP_DIR / thumb_filename
-            img.save(thumb_path)
-
-        video.release()
-        return duration, str(thumb_path)
-    except Exception as e:
-        print(f"Lỗi khi xử lý video {file_path}: {e}")
-        return 0, None
 
 
 class EditorWindow(tk.Toplevel):
@@ -336,8 +293,8 @@ class EditorWindow(tk.Toplevel):
         build_editly_config(self.channel_name, config=config, selected_clips=clip_to_render, output_path=OUT_DIR / self.channel_name)
         # Thêm các clip đã dùng vào used_jsons
         used_videos_path = get_used_videos_path(self.channel_name)
-        save_used_videos(self.timeline_clips, used_videos_path)
-
+        save_used_videos(clip_to_render, used_videos_path)
+        save_render_history(self.imported_clips, load_channel_path(self.channel_name))
     def _detect_gpu(self):
         """Phát hiện loại GPU có sẵn"""
         try:
@@ -614,7 +571,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
                 gap_clip["layers"].append({
                     "type": "video",
                     "path": trans_path,
-                    "start": 0.0,           # chạy từ đầu đoạn gap trên transition file (cutted bằng cutFrom)
+                    "start": 0.0,  # chạy từ đầu đoạn gap trên transition file (cutted bằng cutFrom)
                     "stop": gap_s,
                     "cutFrom": min(pre_s, trans_duration_s),
                     "cutTo": min(pre_s + gap_s, trans_duration_s),
@@ -647,6 +604,120 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
 
     # Nếu chỉ có 1 clip thì all_duration đã cộng ở trên; nếu nhiều clip thì all_duration đã cộng đủ.
 
+    # ============================================================
+    # CẤU HÌNH GPU ENCODING - TỐI ƯU TỐC ĐỘ MÀ KHÔNG MẤT CHẤT LƯỢNG
+    # ============================================================
+
+    # Tự động detect GPU và chọn encoder phù hợp
+    # Ưu tiên: NVIDIA (h264_nvenc) > AMD (h264_amf) > Intel (h264_qsv) > CPU (libx264)
+
+    ffmpeg_params = []
+
+    # Các tùy chọn tối ưu cho GPU encoding
+    gpu_configs = {
+        # NVIDIA GPU (tốt nhất, hỗ trợ rộng rãi)
+        "nvidia": {
+            "codec": "h264_nvenc",
+            "params": [
+                "-preset", "p7",  # preset chất lượng cao nhất (p1-p7, p7 = slow/high quality)
+                "-tune", "hq",  # tune cho high quality
+                "-rc", "vbr",  # variable bitrate (tốt hơn cbr cho chất lượng)
+                "-cq", "19",  # constant quality (18-23, càng thấp càng tốt, 19 = rất tốt)
+                "-b:v", "20M",  # bitrate tham khảo cho VBR
+                "-maxrate", "25M",  # max bitrate
+                "-bufsize", "50M",  # buffer size
+                "-profile:v", "high",  # H.264 profile cao
+                "-rc-lookahead", "32",  # lookahead frames (tối ưu chất lượng)
+                "-spatial_aq", "1",  # spatial adaptive quantization
+                "-temporal_aq", "1",  # temporal adaptive quantization
+                "-bf", "3",  # B-frames
+                "-g", str(fps * 2),  # GOP size (2 giây)
+            ]
+        },
+
+        # AMD GPU
+        "amd": {
+            "codec": "h264_amf",
+            "params": [
+                "-quality", "quality",  # quality mode thay vì speed
+                "-rc", "vbr_latency",  # VBR cho chất lượng tốt
+                "-qp_i", "18",  # QP cho I-frames
+                "-qp_p", "20",  # QP cho P-frames
+                "-qp_b", "22",  # QP cho B-frames
+                "-b:v", "20M",
+                "-maxrate", "25M",
+                "-bufsize", "50M",
+                "-profile:v", "high",
+                "-bf", "3",
+                "-g", str(fps * 2),
+            ]
+        },
+
+        # Intel GPU (Quick Sync)
+        "intel": {
+            "codec": "h264_qsv",
+            "params": [
+                "-preset", "veryslow",  # preset chất lượng cao
+                "-global_quality", "18",  # quality (15-23, thấp hơn = tốt hơn)
+                "-look_ahead", "1",  # enable lookahead
+                "-look_ahead_depth", "40",  # lookahead depth
+                "-b:v", "20M",
+                "-maxrate", "25M",
+                "-bufsize", "50M",
+                "-profile:v", "high",
+                "-bf", "3",
+                "-g", str(fps * 2),
+            ]
+        },
+
+        # CPU fallback (nếu không có GPU hoặc GPU không hỗ trợ)
+        "cpu": {
+            "codec": "libx264",
+            "params": [
+                "-preset", "slow",  # slow preset cho chất lượng tốt
+                "-crf", "18",  # constant rate factor (15-23, 18 = rất tốt)
+                "-profile:v", "high",
+                "-level", "4.2",
+                "-bf", "3",
+                "-g", str(fps * 2),
+                "-movflags", "+faststart",  # web optimization
+                "-pix_fmt", "yuv420p",  # compatibility
+            ]
+        }
+    }
+
+    # Lấy cấu hình từ config hoặc tự động detect
+    gpu_type = config.get("gpu_type", "auto").lower()
+
+    if gpu_type == "auto":
+        # Tự động detect (bạn có thể implement hàm detect GPU)
+        # Ở đây mặc định thử NVIDIA trước
+        gpu_type = "nvidia"
+        print(f"🔍 Tự động chọn GPU encoder: {gpu_type}")
+
+    # Chọn cấu hình phù hợp, fallback về CPU nếu không có
+    selected_config = gpu_configs.get(gpu_type, gpu_configs["cpu"])
+
+    ffmpeg_params.extend(["-c:v", selected_config["codec"]])
+    ffmpeg_params.extend(selected_config["params"])
+
+    # Audio encoding (giữ chất lượng cao)
+    ffmpeg_params.extend([
+        "-c:a", "aac",
+        "-b:a", "320k",  # audio bitrate cao
+        "-ar", "48000",  # sample rate
+        "-ac", "2",  # stereo
+    ])
+
+    # Các tùy chọn chung tối ưu tốc độ
+    ffmpeg_params.extend([
+        "-threads", "0",  # auto-detect số threads
+        "-movflags", "+faststart",  # tối ưu streaming
+    ])
+
+    print(f"🎬 GPU Encoding: {selected_config['codec']}")
+    print(f"⚡ FFmpeg params: {' '.join(ffmpeg_params)}")
+
     # Build spec
     output_file_name = f"{channel_name}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.mp4"
     spec = {
@@ -657,7 +728,10 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
         "keepSourceAudio": True,
         "defaults": {"transition": None},
         "clips": clips_json,
-        "audioTracks": audio_tracks
+        "audioTracks": audio_tracks,
+        "ffmpegOptions": {
+            "outputArgs": ffmpeg_params
+        }
     }
 
     # Lưu file JSON
@@ -731,11 +805,7 @@ def load_json(file_path, default=None):
             return json.load(f)
     except:
         return default
-def load_channel_path(channel_name):
-    channel_path = os.path.join(CHANNELS_DIR, channel_name)
-    if not os.path.exists(channel_path):
-        raise FileNotFoundError(f"Kênh '{channel_name}' chưa tồn tại trong Channels/.")
-    return channel_path
+
 def get_used_videos_path(channel_name):
     channel_path = load_channel_path(channel_name)
     return os.path.join(channel_path, "used_videos.json")

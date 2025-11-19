@@ -1,3 +1,4 @@
+import datetime
 import os
 import random
 import subprocess
@@ -121,3 +122,45 @@ def save_used_videos(used_videos: list, file_path="used_videos.json"):
         json.dump(updated_paths, f, ensure_ascii=False, indent=2)
 
     print(f"✅ Đã lưu {len(updated_paths)} clip vào {file_path}")
+
+def save_render_history(used_videos: list, channel_path: str):
+    os.makedirs(channel_path, exist_ok=True)  # đảm bảo thư mục tồn tại
+
+    date_now = datetime.datetime.now()
+    file_folder = f"history\\{date_now.year}\\{date_now.month}"
+    folder_path = os.path.join(channel_path, file_folder)
+    os.makedirs(folder_path, exist_ok=True)
+    file_name = f"{date_now.year}_{date_now.month}_{date_now.day}.json"
+    file_path = os.path.join(folder_path, file_name)
+
+    # Nếu file đã tồn tại, đọc dữ liệu cũ rồi nối thêm
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                data = []
+        except Exception:
+            data = []
+    else:
+        data = []
+
+    cleaned_clips = []
+    for clip in used_videos:
+        cleaned = {k: v for k, v in clip.items() if k != "var"}
+        # Nếu bạn cần biết clip có selected hay không thì có thể thêm:
+        # cleaned["selected"] = clip["var"].get()
+        cleaned["var"] = clip["var"].get()
+        cleaned_clips.append(cleaned)
+
+    entry = {
+        "datetime": date_now.strftime("%Y-%m-%d %H:%M:%S"),
+        "clips": cleaned_clips
+    }
+    data.append(entry)
+
+    # Ghi đè lại file
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    print(f"✅ Đã lưu lịch sử render: {file_path}")

@@ -8,7 +8,9 @@ import re
 from tkinterdnd2 import TkinterDnD
 from editor_ui import EditorWindow
 from clip_selector import select_clips
-from editor_ui import get_video_info, load_json, get_used_videos_path
+from editor_ui import load_json, get_used_videos_path
+from python.render_history_window import ClipViewerApp
+from helper import get_video_info
 # --- Quản lý đường dẫn ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHANNELS_DIR = PROJECT_ROOT / "Channels"
@@ -71,7 +73,7 @@ class ChannelSelectorApp(TkinterDnD.Tk):
     def __init__(self):
         super().__init__()
         self.title("Funny Video Tool - Quản lý Kênh")
-        self.geometry("450x550")
+        self.geometry("450x600")
 
         # (Phần còn lại của file không thay đổi)
         self.selected_channel = tk.StringVar()
@@ -144,6 +146,10 @@ class ChannelSelectorApp(TkinterDnD.Tk):
             editor_frame, text="Chọn Clips & Dựng Video →", command=self._open_editor_window
         )
         self.open_editor_button.pack(expand=True, ipady=5)
+        self.render_old_clip_button = ttk.Button(
+            editor_frame, text="Render clip cũ →", command=self._open_render_history_window
+        )
+        self.render_old_clip_button.pack(expand=True, ipady=5)
 
     def _open_editor_window(self):
         selected_channel_name = self.selected_channel.get()
@@ -178,6 +184,16 @@ class ChannelSelectorApp(TkinterDnD.Tk):
                 })
 
         editor.render_clip_list()
+
+    def _open_render_history_window(self):
+        selected_channel_name = self.selected_channel.get()
+        if not selected_channel_name:
+            messagebox.showwarning("Chưa chọn kênh", "Vui lòng chọn một kênh trước.")
+            return
+
+        # Ẩn cửa sổ chính khi mở cửa sổ history (tùy bạn)
+        # self.withdraw()
+        ClipViewerApp(self, selected_channel_name)
 
     def _create_new_channel(self):
         dialog = ChannelCreationDialog(self, "Tạo kênh mới", self.initial_config_template)
