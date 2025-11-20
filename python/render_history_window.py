@@ -1,11 +1,10 @@
 import datetime
 import tkinter as tk
-from tkinter import ttk
 from python.consts import *
 from python.editor_ui import EditorWindow
 from python.helper import read_all_folder_name, load_history_folder, read_all_file_name, read_json_file_content, \
     get_video_info
-
+from tkinter import ttk, messagebox
 
 class ClipViewerApp(tk.Toplevel):
     def __init__(self, root, channel_name):
@@ -113,11 +112,12 @@ class ClipViewerApp(tk.Toplevel):
                     self.year = selected_year_int
                     self.month_availables = self._read_history_month_in_year(self.history_folder_path, self.year)
                     self.month_combo["values"] = self.month_availables
-                    self.month_combo.current(0)  # Reset tháng về đầu
-                    self.on_month_select()  # Cập nhật lại ngày
+                    if self.month_availables and len(self.month_availables) > 0:
+                        self.month_combo.current(0)  # Reset tháng về đầu
+                    self.on_month_select(None)  # Cập nhật lại ngày
         except Exception as e:
             print("lỗi", e)
-    def on_month_select(self):
+    def on_month_select(self, event):
         """Xử lý khi người dùng chọn ngày"""
         try:
             selected_month = self.month_combo.get()
@@ -125,9 +125,15 @@ class ClipViewerApp(tk.Toplevel):
                 self.month = int(selected_month)
                 self.date_availables = self._read_history_file_in_month(self.history_folder_path, self.year, self.month)
                 self.date_combo["values"] = self.date_availables
-                if self.date_availables:
+                old_value = self.date_combo.get()
+                if old_value not in self.date_availables:
+                    self.date_combo.set("")  # clear hiển thị
+                else:
+                    # nếu còn tồn tại → giữ nguyên hoặc chọn nó lại
+                    self.date_combo.set(old_value)
+                if self.date_availables and len(self.date_availables) > 0:
                     self.date_combo.current(len(self.date_availables) - 1)  # Reset ngày
-                    self.on_date_select(None)  # Load data
+                self.on_date_select(None)  # Load data
         except Exception as e:
                 print("lỗi", e)
     def on_date_select(self, event):
@@ -185,7 +191,7 @@ class ClipViewerApp(tk.Toplevel):
         # 1. Lấy dòng đang được chọn trên Treeview
         selected_items = self.tree.selection()
         if not selected_items:
-            print("Chưa chọn dòng nào để render!")
+            messagebox.showwarning("Chưa chọn video", "Bạn chưa chọn video nào để render lại")
             return
 
         # 2. Lấy thông tin cột đầu tiên (index)
