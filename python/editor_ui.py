@@ -1,8 +1,6 @@
 import tkinter as tk
 import platform
 from tkinter import ttk, filedialog
-import os
-import cv2
 from PIL import Image, ImageTk
 from tkinterdnd2 import DND_FILES
 import json
@@ -12,6 +10,7 @@ from python.clip_selector import save_used_videos, save_render_history
 from DragSortHelper import DDList, ClipItem
 from python.consts import *
 from python.helper import load_channel_path
+from python.render_helper import build_and_render_from_config
 
 try:
     from Tkinter import Tk, IntVar, Label, Entry, Button
@@ -747,13 +746,12 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     print(f"✅ Đã lưu cấu hình editly: {config_path}")
 
     # Gọi render
-    start_render(config_path, selected_clips, channel_name)
+    start_render(config_path, selected_clips, channel_name, config)
     return spec
 
-def render_video(config_path, selected_clips, channel_name):
+def render_video(config_path, selected_clips, channel_name, channel_config):
     try:
-        subprocess.run(["editly", config_path], check=True, shell=True)
-        messagebox.showinfo("Hoàn tất", f"Render video thành công 🎉")
+        build_and_render_from_config(config_path, channel_config)
         os.remove(config_path)
         save_used_videos(selected_clips, get_used_videos_path(channel_name))
     except subprocess.CalledProcessError as e:
@@ -761,9 +759,9 @@ def render_video(config_path, selected_clips, channel_name):
     except FileNotFoundError:
         print("⚠️ Lệnh 'editly' chưa được cài đặt hoặc không có trong PATH!")
 
-def start_render(config_path, selected_clips, channel_name):
+def start_render(config_path, selected_clips, channel_name, channel_config):
     # Tạo luồng riêng để không làm treo UI
-    thread = threading.Thread(target=render_video, args=(config_path,selected_clips,channel_name,))
+    thread = threading.Thread(target=render_video, args=(config_path,selected_clips,channel_name,channel_config,))
     thread.start()
 def load_channel_config(channel_name):
     """Đọc config.json trong thư mục kênh"""
