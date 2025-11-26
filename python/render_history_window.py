@@ -11,7 +11,7 @@ class ClipViewerApp(tk.Toplevel):
         super().__init__(root)
         self.root = root
         self.root.title("Quản Lý Clips Đã Render")
-        self.root.geometry("800x500")
+        self.root.geometry("800x600")
         date_now = datetime.datetime.now()
         self.year = date_now.year
         self.month = date_now.month
