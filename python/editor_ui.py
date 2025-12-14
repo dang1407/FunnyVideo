@@ -759,8 +759,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
 
 def render_video(config_path, selected_clips, channel_name, channel_config):
     try:
-        cmd = generate_ffmpeg_command(config_path)
-        subprocess.run(cmd, check=True)
+        generate_ffmpeg_command(config_path)
         os.remove(config_path)
         save_used_videos(selected_clips, get_used_videos_path(channel_name))
     except subprocess.CalledProcessError as e:

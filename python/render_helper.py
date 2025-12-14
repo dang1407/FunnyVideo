@@ -255,8 +255,13 @@ def generate_ffmpeg_command(config_path):
         "-r", str(fps),
         out_path
     ])
-
-    return cmd_args
+    
+    try:
+        subprocess.run(cmd_args, check=True)
+        messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
+    except subprocess.CalledProcessError as e:
+        messagebox.showerror("Lỗi render", f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.")
+        raise
 
 def run(cmd):
     print("⚙️ Run:", " ".join(shlex.quote(c) for c in cmd))
