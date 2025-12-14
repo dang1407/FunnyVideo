@@ -5,6 +5,258 @@ import os
 import uuid
 from tkinter import ttk, messagebox
 
+import json
+import subprocess
+import os
+import sys
+
+# ==========================================
+# CẤU HÌNH
+# ==========================================
+FFMPEG_EXEC = "ffmpeg"
+
+
+def get_input_index(file_path, input_map, inputs_list):
+    if file_path not in input_map:
+        input_map[file_path] = len(inputs_list)
+        inputs_list.append(file_path)
+    return input_map[file_path]
+
+
+def generate_ffmpeg_command(config_path):
+    with open(config_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+    width = json_data.get('width', 1920)
+    height = json_data.get('height', 1080)
+    fps = json_data.get('fps', 25)
+    out_path = json_data.get('outPath', 'output.mp4')
+
+    input_map = {}
+    inputs_list = []
+    filter_chains = []
+    concat_segments = []
+
+    # ==========================================
+    # TÍNH TOÁN TIMELINE TÍCH LŨY
+    # ==========================================
+    cumulative_time = 0.0
+    clip_start_times = []
+
+    for clip in json_data['clips']:
+        clip_start_times.append(cumulative_time)
+
+        # Tính duration của clip
+        clip_duration = clip.get('duration')
+        if not clip_duration:
+            # Tìm main video layer để lấy duration
+            main_video = next((l for l in clip.get('layers', []) if l['type'] == 'video'), None)
+            if main_video:
+                cut_from = main_video.get('cutFrom', 0)
+                cut_to = main_video.get('cutTo')
+                clip_duration = cut_to - cut_from if cut_to else 0
+
+        cumulative_time += clip_duration if clip_duration else 0
+
+    # ==========================================
+    # XỬ LÝ VIDEO CLIPS
+    # ==========================================
+    for i, clip in enumerate(json_data['clips']):
+        clip_duration = clip.get('duration')
+        layers = clip.get('layers', [])
+        clip_start_time = clip_start_times[i]
+
+        out_v = f"v_clip_{i}_out"
+        out_a = f"a_clip_{i}_out"
+        current_v_pad = None
+        has_audio = False
+
+        main_video_layer = next((l for l in layers if l['type'] == 'video'), None)
+        fill_color_layer = next((l for l in layers if l['type'] == 'fill-color'), None)
+
+        # --- 1. PHÂN LOẠI LAYERS ---
+        transition_layers = []
+        logo_layers = []
+
+        for layer in layers:
+            if layer == main_video_layer or layer == fill_color_layer:
+                continue
+
+            if layer['type'] == 'video':
+                # Transition video
+                transition_layers.append(layer)
+            elif layer['type'] == 'image-overlay':
+                # Logo
+                logo_layers.append(layer)
+
+        # --- 2. TẠO LAYER NỀN (BASE) ---
+        if main_video_layer:
+            path = main_video_layer['path']
+            idx = get_input_index(path, input_map, inputs_list)
+            cut_to = main_video_layer.get('cutTo')
+            cut_from = main_video_layer.get('cutFrom', 0)
+            segment_duration = cut_to - cut_from if cut_to else None
+
+            trim_cmd = f"[{idx}:v]trim=start={cut_from}"
+            if cut_to:
+                trim_cmd += f":end={cut_to}"
+            trim_cmd += f",setpts=PTS-STARTPTS[v_tmp_{i}_raw]"
+            filter_chains.append(trim_cmd)
+
+            if json_data.get('keepSourceAudio', True):
+                atrim_cmd = f"[{idx}:a]atrim=start={cut_from}"
+                if cut_to:
+                    atrim_cmd += f":end={cut_to}"
+                atrim_cmd += f",asetpts=PTS-STARTPTS[{out_a}]"
+                filter_chains.append(atrim_cmd)
+                has_audio = True
+
+            if main_video_layer.get('resizeMode') == 'contain-blur':
+                bg_chain = (f"[v_tmp_{i}_raw]split=2[bg_{i}][fg_{i}];"
+                            f"[bg_{i}]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},boxblur=20:10[bg_blur_{i}];"
+                            f"[fg_{i}]scale={width}:{height}:force_original_aspect_ratio=decrease[fg_scaled_{i}];"
+                            f"[bg_blur_{i}][fg_scaled_{i}]overlay=(W-w)/2:(H-h)/2[v_base_{i}]")
+                filter_chains.append(bg_chain)
+                current_v_pad = f"[v_base_{i}]"
+            else:
+                scale_cmd = f"[v_tmp_{i}_raw]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}[v_base_{i}]"
+                filter_chains.append(scale_cmd)
+                current_v_pad = f"[v_base_{i}]"
+
+        elif fill_color_layer:
+            color = fill_color_layer.get('color', '#000000')
+            dur = clip_duration if clip_duration else 0.1
+            segment_duration = dur
+
+            color_cmd = f"color=c={color}:s={width}x{height}:d={dur}[v_base_{i}]"
+            filter_chains.append(color_cmd)
+            current_v_pad = f"[v_base_{i}]"
+
+            silence_cmd = f"anullsrc=cl=stereo:r=44100:d={dur}[{out_a}]"
+            filter_chains.append(silence_cmd)
+            has_audio = True
+
+        # --- 3. OVERLAY LOGOS TRƯỚC (logo ở giữa, sẽ bị transition che khi có transition) ---
+        for logo_idx, layer in enumerate(logo_layers):
+            path = layer['path']
+            idx = get_input_index(path, input_map, inputs_list)
+            layer_pad = f"logo_{i}_{logo_idx}"
+
+            # Thêm loop để logo không bị hết, scale về kích thước canvas
+            cmd = f"[{idx}:v]loop=loop=-1:size=1:start=0,scale={width}:{height}:force_original_aspect_ratio=decrease[{layer_pad}]"
+            filter_chains.append(cmd)
+
+            # Logo luôn hiển thị, không cần enable condition phức tạp
+            # Transition sẽ tự động che logo khi xuất hiện
+            next_pad = f"v_clip_{i}_logo_{logo_idx}"
+            overlay_cmd = f"{current_v_pad}[{layer_pad}]overlay=(W-w)/2:(H-h)/2:shortest=1[{next_pad}]"
+            filter_chains.append(overlay_cmd)
+            current_v_pad = f"[{next_pad}]"
+
+        # --- 4. OVERLAY TRANSITIONS SAU CÙNG (đè lên logo, che logo khi có transition) ---
+        overlay_idx = 0
+        for layer in transition_layers:
+            path = layer['path']
+            idx = get_input_index(path, input_map, inputs_list)
+            layer_pad = f"layer_{i}_{overlay_idx}"
+
+            cut_from = layer.get('cutFrom', 0)
+            cut_to = layer.get('cutTo')
+            start_time = layer.get('start', 0)
+            stop_time = layer.get('stop')
+
+            trim_part = f"[{idx}:v]trim=start={cut_from}"
+            if cut_to:
+                trim_part += f":end={cut_to}"
+            trim_part += f",setpts=PTS-STARTPTS[{layer_pad}_raw]"
+            filter_chains.append(trim_part)
+
+            scale_trans = f"[{layer_pad}_raw]scale={width}:{height}[{layer_pad}]"
+            filter_chains.append(scale_trans)
+
+            # Shift PTS để transition xuất hiện đúng thời điểm
+            fps_fix = f"[{layer_pad}]setpts=PTS+{start_time}/TB[{layer_pad}_shifted]"
+            filter_chains.append(fps_fix)
+
+            # Enable transition video trong khoảng thời gian của nó
+            enable_expr = f"enable='between(t,{start_time},{stop_time})'"
+            next_pad = f"v_clip_{i}_trans_{overlay_idx}"
+            overlay_cmd = f"{current_v_pad}[{layer_pad}_shifted]overlay=0:0:{enable_expr}[{next_pad}]"
+            filter_chains.append(overlay_cmd)
+            current_v_pad = f"[{next_pad}]"
+            overlay_idx += 1
+
+        # --- 5. KẾT THÚC CLIP ---
+        if not has_audio:
+            dur_str = f":d={segment_duration}" if segment_duration else ""
+            silence_cmd = f"anullsrc=cl=stereo:r=44100{dur_str}[{out_a}]"
+            filter_chains.append(silence_cmd)
+
+        filter_chains.append(f"{current_v_pad}setsar=1[{out_v}]")
+        concat_segments.append(f"[{out_v}]")
+        concat_segments.append(f"[{out_a}]")
+
+    # ==========================================
+    # CONCAT & MIX
+    # ==========================================
+    n_clips = len(json_data['clips'])
+    concat_cmd = "".join(concat_segments) + f"concat=n={n_clips}:v=1:a=1[main_video][main_audio_raw]"
+    filter_chains.append(concat_cmd)
+
+    audio_tracks = json_data.get('audioTracks', [])
+    mix_inputs = ["[main_audio_raw]"]
+
+    for k, track in enumerate(audio_tracks):
+        path = track['path']
+        idx = get_input_index(path, input_map, inputs_list)
+        start = track.get('start', 0)
+        cut_from = track.get('cutFrom', 0)
+        cut_to = track.get('cutTo')
+        mix_vol = track.get('mixVolume', 1)
+
+        track_pad = f"track_{k}"
+        delayed_pad = f"track_{k}_delayed"
+
+        cmd = f"[{idx}:a]atrim=start={cut_from}"
+        if cut_to:
+            cmd += f":end={cut_to}"
+        cmd += f",asetpts=PTS-STARTPTS,volume={mix_vol}[{track_pad}]"
+        filter_chains.append(cmd)
+
+        delay_ms = int(start * 1000)
+        delay_cmd = f"[{track_pad}]adelay={delay_ms}|{delay_ms}[{delayed_pad}]"
+        filter_chains.append(delay_cmd)
+        mix_inputs.append(f"[{delayed_pad}]")
+
+    if len(mix_inputs) > 1:
+        mix_cmd = "".join(
+            mix_inputs) + f"amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0[final_audio]"
+        filter_chains.append(mix_cmd)
+    else:
+        filter_chains.append(f"[main_audio_raw]acopy[final_audio]")
+
+    # ==========================================
+    # EXECUTE
+    # ==========================================
+    cmd_args = [FFMPEG_EXEC, "-y"]
+    for inp in inputs_list:
+        cmd_args.extend(["-i", inp])
+
+    cmd_args.extend(["-filter_complex", ";".join(filter_chains)])
+    cmd_args.extend(["-map", "[main_video]", "-map", "[final_audio]"])
+    cmd_args.extend([
+        "-c:v", "h264_nvenc",
+        "-preset", "p6",
+        "-tune", "hq",
+        "-rc", "vbr",
+        "-cq", "23",
+        "-b:v", "0",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-r", str(fps),
+        out_path
+    ])
+
+    return cmd_args
 
 def run(cmd):
     print("⚙️ Run:", " ".join(shlex.quote(c) for c in cmd))

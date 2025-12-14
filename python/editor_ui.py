@@ -9,8 +9,8 @@ import threading
 from python.clip_selector import save_used_videos, save_render_history
 from DragSortHelper import DDList, ClipItem
 from python.consts import *
-from python.helper import load_channel_path
-from python.render_helper import build_and_render_from_config
+from python.helper import load_channel_path, get_video_info
+from python.render_helper import build_and_render_from_config, generate_ffmpeg_command
 
 try:
     from Tkinter import Tk, IntVar, Label, Entry, Button
@@ -480,6 +480,13 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     audio_tracks = []
 
     def main_clip_layer(full_path: str, cut_from: float = 0.0, cut_to: Optional[float] = None):
+        """
+        Tạo layer cho 1 clip:
+        Thứ tự layers (từ dưới lên trên):
+        1. Video chính (nền)
+        2. Logo (luôn hiển thị)
+        3. Transition sẽ được append sau (cao nhất)
+        """
         v_layer = {
             "type": "video",
             "path": full_path,
@@ -500,6 +507,7 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
             "width": 1.0
         }
 
+        # Thứ tự: video nền trước, logo sau (transition sẽ append sau cùng)
         return {"layers": [v_layer, logo_layer]}
 
     def black_gap_clip(duration_s: float):
@@ -751,7 +759,8 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
 
 def render_video(config_path, selected_clips, channel_name, channel_config):
     try:
-        build_and_render_from_config(config_path, channel_config)
+        cmd = generate_ffmpeg_command(config_path)
+        subprocess.run(cmd, check=True)
         os.remove(config_path)
         save_used_videos(selected_clips, get_used_videos_path(channel_name))
     except subprocess.CalledProcessError as e:
