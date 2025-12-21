@@ -4,6 +4,7 @@ import subprocess
 import os
 import uuid
 from tkinter import ttk, messagebox
+import tkinter as tk
 
 import json
 import subprocess
@@ -258,9 +259,33 @@ def generate_ffmpeg_command(config_path):
     
     try:
         subprocess.run(cmd_args, check=True)
-        messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
+        # Tìm root window để messagebox hiển thị phía trên
+        root = tk._default_root
+        if root:
+            for widget in root.winfo_children():
+                if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
+                    widget.attributes('-topmost', True)
+                    messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}", parent=widget)
+                    widget.attributes('-topmost', False)
+                    break
+            else:
+                messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
+        else:
+            messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
     except subprocess.CalledProcessError as e:
-        messagebox.showerror("Lỗi render", f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.")
+        # Tìm root window để messagebox hiển thị phía trên
+        root = tk._default_root
+        if root:
+            for widget in root.winfo_children():
+                if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
+                    widget.attributes('-topmost', True)
+                    messagebox.showerror("Lỗi render", f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.", parent=widget)
+                    widget.attributes('-topmost', False)
+                    break
+            else:
+                messagebox.showerror("Lỗi render", f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.")
+        else:
+            messagebox.showerror("Lỗi render", f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.")
         raise
 
 def run(cmd):
@@ -451,5 +476,17 @@ def build_and_render_from_config(video_config_path, config_dict):
             os.remove(f)
 
     print("✅ DONE:", out_path)
-    messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
+    # Tìm root window để messagebox hiển thị phía trên
+    root = tk._default_root
+    if root:
+        for widget in root.winfo_children():
+            if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
+                widget.attributes('-topmost', True)
+                messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}", parent=widget)
+                widget.attributes('-topmost', False)
+                break
+        else:
+            messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
+    else:
+        messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
     return out_path

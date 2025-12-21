@@ -1,4 +1,5 @@
 import tkinter as tk
+import customtkinter as ctk
 import platform
 from tkinter import ttk, filedialog
 from PIL import Image, ImageTk
@@ -23,12 +24,20 @@ except ImportError:
 # --- Hằng số và đường dẫn ---
 
 
-class EditorWindow(tk.Toplevel):
+class EditorWindow(ctk.CTkToplevel):
     def __init__(self, parent, channel_name):
         super().__init__(parent)
         self.channel_name = channel_name
         self.title(f"Video Editor - Kênh: {self.channel_name}")
-        self.geometry("1200x700")
+        width = 1200
+        height = 700
+        # Điều chỉnh vị trí cao hơn một chút để tránh bị tụt xuống dưới
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = max(20, (self.winfo_screenheight() // 2) - (height // 2) - 30)
+        self.geometry(f'{width}x{height}+{x}+{y}')
+        # Đảm bảo cửa sổ editor luôn ở trên cửa sổ main
+        self.attributes('-topmost', True)
+        self.after(100, lambda: self.attributes('-topmost', False))
 
         self.imported_clips = []  # List các dictionary chứa thông tin clip
         self.timeline_clips = []
@@ -42,7 +51,6 @@ class EditorWindow(tk.Toplevel):
         self.current_cap = None
         self.play_button = None  # Nút Play/Pause
         # --------------------------------
-        self._create_menu()
         self._create_layout()
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
@@ -57,191 +65,137 @@ class EditorWindow(tk.Toplevel):
         self.master.deiconify()
         self.destroy()
 
-    def _create_menu(self):
-        menu_bar = tk.Menu(self)
-        self.config(menu=menu_bar)
-        file_menu = tk.Menu(menu_bar, tearoff=0)
-        file_menu.add_command(label="Import Clips...", command=self._import_clips_from_dialog)
-        file_menu.add_separator()
-        file_menu.add_command(label="Thoát", command=self._on_closing)
-        menu_bar.add_cascade(label="File", menu=file_menu)
-
     def _create_layout(self):
-        main_pane = ttk.PanedWindow(self, orient=tk.VERTICAL)
-        main_pane.pack(fill=tk.BOTH, expand=True)
-        top_pane = ttk.PanedWindow(main_pane, orient=tk.HORIZONTAL)
-        main_pane.add(top_pane, weight=4)
+        # We use a simple grid layout or pack.
+        # Top: Media Bin. Bottom: (Maybe Controls or Timeline if added later)
+        # Original used PanedWindow. We can use CTkScrollableFrame for the main area.
 
-        # --- Cột trái: Media Bin (với thumbnail và scroll) ---
-        media_container = ttk.LabelFrame(top_pane, text="Media Imported", padding=5)
-        top_pane.add(media_container, weight=1)
+        # Main Container
+        main_container = ctk.CTkFrame(self)
+        main_container.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Thiết lập để kéo thả file vào khu vực này
-        media_container.drop_target_register(DND_FILES)
-        media_container.dnd_bind('<<Drop>>', self._handle_drop_import)
+        # Left Panel (Media Bin)
+        # In original, media bin was on left?, wait.
+        # Original: PanedWindow vertical. top_pane horizontal.
+        # media_container in top pane.
 
-        # Tạo một canvas có thể cuộn
-        self.media_canvas = tk.Canvas(media_container, borderwidth=0)
-        scrollbar = ttk.Scrollbar(media_container, orient="vertical", command=self.media_canvas.yview)
-        self.media_items_frame = ttk.Frame(self.media_canvas)  # Frame chứa các item
+        # Let's simplify: A big frame for media sorting.
+        # And a control panel on right or top.
 
-        self.media_canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        self.media_canvas.pack(side="left", fill="both", expand=True)
-        self.media_canvas.create_window((0, 0), window=self.media_items_frame, anchor="nw")
+        # Control Panel
+        control_panel = ctk.CTkFrame(main_container, height=50)
+        control_panel.pack(fill="x", side="bottom", padx=5, pady=5)
 
-        def _on_mousewheel(event):
-            self.media_canvas.yview_scroll(-1 * int(event.delta / 120), "units")
+        ctk.CTkButton(control_panel, text="Import Clips...", command=self._import_clips_from_dialog).pack(side="left",
+                                                                                                          padx=10,
+                                                                                                          pady=10)
+        ctk.CTkButton(control_panel, text="Render Video", command=self._render_video, fg_color="green").pack(
+            side="left", padx=10, pady=10)
 
-        # Windows
-        self.media_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.duration_label = ctk.CTkLabel(control_panel, text="Duration: 0 (s)", font=("Arial", 14, "bold"))
+        self.duration_label.pack(side="right", padx=20)
 
-        # macOS (dùng delta khác)
-        self.media_canvas.bind_all("<Button-4>", lambda e: self.media_canvas.yview_scroll(-1, "units"))
-        self.media_canvas.bind_all("<Button-5>", lambda e: self.media_canvas.yview_scroll(1, "units"))
+        # Media Bin Area
+        media_group = ctk.CTkFrame(main_container)
+        media_group.pack(fill="both", expand=True, padx=5, pady=5)
 
-        def on_frame_configure(event): self.media_canvas.configure(scrollregion=self.media_canvas.bbox("all"))
+        ctk.CTkLabel(media_group, text="Media Imported (Drag & Drop to Reorder)", font=("Arial", 12)).pack(anchor="w",
+                                                                                                           padx=10,
+                                                                                                           pady=5)
 
-        self.media_items_frame.bind("<Configure>", on_frame_configure)
+        # Scrollable Frame for Media Items
+        self.media_items_frame = ctk.CTkScrollableFrame(media_group, label_text="Clips")
+        self.media_items_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # add_to_timeline_button = ttk.Button(media_container, text="Thêm các clip đã chọn vào Timeline ↓",
-        #                                     command=self._add_selected_to_timeline)
-        # add_to_timeline_button.pack(side="top", padx=5, pady=5)
+        # Register Drop Target (TkinterDnD) on the list frame
+        # Note: TkinterDnD registration usually works on widgets that have a window ID.
+        # CTkScrollableFrame -> ._parent_frame or similar.
+        # Safe to register on the outer frame.
+        self.media_items_frame.drop_target_register(DND_FILES)
+        self.media_items_frame.dnd_bind('<<Drop>>', self._handle_drop_import)
 
-        render_video_btn = ttk.Button(media_container, text="Render Video",
-                                            command=self._render_video)
-        render_video_btn.pack(side="top", padx=5, pady=20)
-
-        self.duration_label = ttk.Label(media_container, text="Duration: 0 (s)")
-        self.duration_label.pack(side="top", padx=5, pady=30)
     def _raw_media_bin(self):
-        """Vẽ lại toàn bộ danh sách media clip."""
-        # Xóa các widget cũ để vẽ lại
-        for widget in self.media_items_frame.winfo_children():
-            widget.destroy()
-
-        self._image_references = []  # Giữ tham chiếu ảnh
-        number_selected_clips = 0
+        # Calculate duration
         total_selected_duration = 0
+        number_selected_clips = 0
         for i, clip in enumerate(self.imported_clips):
             if clip["var"].get():
                 number_selected_clips += 1
                 try:
-                    clip_dur = float(clip["duration"])
-                    total_selected_duration += clip_dur
+                    total_selected_duration += float(clip["duration"])
                 except:
-                    total_selected_duration += 0
-        self.duration_label.config(text=f"Duration = {total_selected_duration} (s)")
+                    pass
+        self.duration_label.configure(text=f"Duration: {total_selected_duration:.2f} (s)")
 
-        sortable_list = DDList(self.media_items_frame, 200, 100, offset_x=10, offset_y=10, gap=10, item_borderwidth=1,
-                               item_relief="groove")
-        sortable_list.pack(expand=True, fill=BOTH)
-        for i, clip in enumerate(self.imported_clips):
-            # Frame chính cho mỗi item
-            item_frame = ttk.Frame(self.media_items_frame, padding=5, relief="groove", borderwidth=1)
-            item_frame.pack(fill="x", padx=5, pady=2)
-            # --- GÁN INDEX VÀO FRAME ĐỂ NHẬN DIỆN KHI KÉO THẢ ---
-            item_frame.clip_index = i
+        # Clear existing
+        for widget in self.media_items_frame.winfo_children():
+            widget.destroy()
 
-            # Thumbnail
-            try:
-                img = Image.open(clip["thumb_path"])
-                # Thay đổi: Sử dụng Image.Resampling.LANCZOS thay vì Image.ANTIALIAS
-                img = img.resize(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                thumb_label = ttk.Label(item_frame, image=photo)
-                thumb_label.pack(side="left", padx=5)
-                thumb_label.image = photo
-                self._image_references.append(photo)
-            except Exception:
-                # Tạo một thumbnail trống nếu có lỗi
-                empty_thumb = Image.new('RGB', THUMBNAIL_SIZE, (50, 50, 50))
-                photo = ImageTk.PhotoImage(empty_thumb)
-                thumb_label = ttk.Label(item_frame, image=photo)
-                thumb_label.pack(side="left", padx=5)
-                thumb_label.image = photo
-                self._image_references.append(photo)
+        self._image_references = []
 
-            # Checkbox
-            check = ttk.Checkbutton(item_frame, variable=clip["var"])
-            check.pack(side="left", padx=5)
-            check.configure(command=lambda clip_index = i: self.toggle_select_clip(clip_index))
+        # Use DDList
+        def on_reorder(new_order):
+            self.imported_clips = new_order
+            # Update display ??? Or just internal list?
+            # Original code updated internal list.
 
-            # Thông tin
-            info_text = f"{os.path.basename(clip['path'])}\n[{self.format_time(clip['duration'])}]"
-            info_label = ttk.Label(item_frame, text=info_text, justify="left", font=("Arial", 8))
-            info_label.pack(side="left", fill="x", expand=True, padx=5)
+        # Create DDList inside the scrollable frame
+        # The scrollable frame will handle scrolling if DDList is large.
+        # But DDList is absolute positioning. We need to set its size.
+        # DDList (Frame) height grows with items. CTkScrollableFrame adjusts scrollbar.
 
-            # Nút Play (Bạn có thể thêm hàm _open_in_default_player sau)
-            play_btn = ttk.Button(item_frame, text="▶", width=4)  # Rút gọn text
-            play_btn.pack(side="right", padx=5)
-            play_btn.configure(command=lambda p=clip["path"]: self._open_in_default_player(p))
+        self.ddlist = DDList(self.media_items_frame, item_width=600, item_height=80,
+                             offset_x=10, offset_y=10, gap=10, reorder_callback=on_reorder,
+                             fg_color="transparent")  # transparent to blend with scrollable frame
+        self.ddlist.pack(fill="x", expand=False)  # Grow with content height
 
-            if clip["var"].get() and (i != number_selected_clips - 1 or i != 0):
-                go_to_top_btn = ttk.Button(item_frame, text="⬆", width=4)
-                go_to_top_btn.pack(side="right", padx=5)
-                go_to_top_btn.configure(command=lambda clip_index=i: self.change_clip_index_by_offset(clip_index, 1))
-                go_to_bottom_btn = ttk.Button(item_frame, text="⬇", width=4)
-                go_to_bottom_btn.pack(side="right", padx=5)
-                go_to_bottom_btn.configure(command=lambda clip_index=i: self.change_clip_index_by_offset(clip_index, -1))
+        # Add items
+        for clip in self.imported_clips:
+            # We must pass 'clip' as value to ClipItem
+            # ClipItem expects (master, clip, ...)
+            item = ClipItem(self.ddlist, clip, 600, 80, self)
+            self.ddlist.add_item(item)
 
     def render_clip_list(self):
-        total_selected_duration = 0
-        for i, clip in enumerate(self.imported_clips):
-            if clip["var"].get():
-                try:
-                    clip_dur = float(clip["duration"])
-                    total_selected_duration += clip_dur
-                except:
-                    total_selected_duration += 0
-        self.duration_label.config(text=f"Duration: {total_selected_duration} (s)")
-        for child in self.media_items_frame.winfo_children():
-            child.destroy()
-
-        def on_reorder(new_order):
-            """Callback khi reorder -> cập nhật self.imported_clips"""
-            self.imported_clips = new_order
-
-        ddlist = DDList(self.media_items_frame, item_width=600, item_height=80, item_relief="groove",
-                        item_borderwidth=1, item_background="#2f2f2f", offset_x=5, offset_y=5, gap=5,
-                        reorder_callback=on_reorder)
-        ddlist.pack(fill="both", expand=True)
-
-        for clip in self.imported_clips:
-            item = ClipItem(ddlist, clip, 600, 80, self)
-            ddlist.add_item(item)
-
-        self.ddlist = ddlist
+        self._raw_media_bin()
     # --- CÁC HÀM XỬ LÝ SỰ KIỆN ---
     def _import_clips_from_dialog(self):
         initial_dir = PROJECT_ROOT / "Main_clips"
         file_paths = filedialog.askopenfilenames(title="Chọn video clips", initialdir=initial_dir,
                                                  filetypes=[("Video", "*.mp4 *.mov *.avi")])
+        # Đảm bảo cửa sổ editor luôn ở trên sau khi đóng dialog
+        self.lift()
+        self.focus_force()
         if file_paths: self._add_files_to_media_list(file_paths)
 
     def _handle_drop_import(self, event):
-        file_paths = self.tk.splitlist(event.data)
-        if file_paths: self._add_files_to_media_list(file_paths)
+        if event.data:
+            # TkinterDnD may return braced strings for spaces
+            file_paths = self.tk.splitlist(event.data)
+            if file_paths: self._add_files_to_media_list(file_paths)
 
     def _add_files_to_media_list(self, file_paths):
         newly_added = False
         for path in file_paths:
             normalized_path = os.path.normpath(path)
-            # Kiểm tra trùng lặp
             if any(c['path'] == normalized_path for c in self.imported_clips): continue
 
             if os.path.isfile(normalized_path):
                 duration, thumb_path = get_video_info(normalized_path)
                 if duration > 0 and thumb_path:
+                    # In CTk, BooleanVar is ctk.BooleanVar or tk.BooleanVar?
+                    # CTkCheckBox uses tk.BooleanVar or ctk.BooleanVar.
+                    # Prefer ctk.BooleanVar if available?
+                    # ctk doesn't have BooleanVar export? It uses tkinter.Variable.
                     self.imported_clips.append({
                         "path": normalized_path,
                         "duration": duration,
                         "thumb_path": thumb_path,
-                        "var": tk.BooleanVar(value=False)
+                        "var": ctk.BooleanVar(value=True) # Default true? Original was false then true?
                     })
                     newly_added = True
 
-        if newly_added: self._raw_media_bin()
+        if newly_added: self.render_clip_list()
 
     # def _on_drag_start(self, event):
     #     """Khi bắt đầu kéo một item."""
@@ -362,29 +316,19 @@ class EditorWindow(tk.Toplevel):
         if self.current_cap:
             self.current_cap.release()
             self.current_cap = None
-        if self.current_player and self.current_player.is_alive():
-            self.current_player.join(timeout=1)
 
     def _open_in_default_player(self, path):
-        if self.current_video_path and os.path.exists(self.current_video_path):
-            open_file_cross_platform(self.current_video_path)  # Chỉ hoạt động trên Windows
-        elif path and os.path.exists(path):
-            open_file_cross_platform(path)
-        else:
-            messagebox.showinfo("Thông báo", "Chưa chọn video nào để mở.")
+        open_file_cross_platform(path)
+
     def toggle_select_clip(self, current_clip_index):
-        self.render_clip_list()
-        # for index, clip in enumerate(self.imported_clips):
-        #     if clip["var"].get():
-        #         temp_clips.append(clip)
-        # for index, clip in enumerate(self.imported_clips):
-        #     if not clip["var"].get() and index == current_clip_index:
-        #         temp_clips.append(clip)
-        # for index, clip in enumerate(self.imported_clips):
-        #     if not clip["var"].get() and not index == current_clip_index:
-        #         temp_clips.append(clip)
-        # self.imported_clips = temp_clips
-        # self._raw_media_bin()
+        # Refresh duration label
+        total = 0
+        for clip in self.imported_clips:
+            if clip["var"].get():
+                try: total += float(clip["duration"])
+                except: pass
+        self.duration_label.configure(text=f"Duration: {total:.2f} (s)")
+
     def change_clip_index_by_offset(self, current_clip_index, offset):
         temp_clips = []
         number_clips = len(self.imported_clips)

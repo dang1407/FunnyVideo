@@ -1,18 +1,18 @@
-from tkinter import *
-from tkinter import ttk
+import customtkinter as ctk
 from PIL import Image, ImageTk, ImageDraw
 import os
 
 THUMBNAIL_SIZE = (120, 68)
 
 # -----------------------------
-# Item class (như cũ)
+# Item class
 # -----------------------------
-class Item(Frame):
+class Item(ctk.CTkFrame):
     def __init__(self, master, value, width, height, selection_handler=None, drag_handler=None, drop_handler=None,
                  **kwargs):
-        kwargs.setdefault("class_", "Item")
-        Frame.__init__(self, master, **kwargs)
+        # ctk frame usage
+        super().__init__(master, width=width, height=height, **kwargs)
+        
         self._x = None
         self._y = None
         self._width = width
@@ -30,21 +30,26 @@ class Item(Frame):
     def init(self, container, x, y):
         self._x = x
         self._y = y
-        self.place(in_=container, x=x, y=y, width=self._width, height=self._height)
-        self.bind_class(self._tag, "<ButtonPress-1>", self._on_selection)
-        self.bind_class(self._tag, "<B1-Motion>", self._on_drag)
-        self.bind_class(self._tag, "<ButtonRelease-1>", self._on_drop)
-        self._add_bindtag(self)
-        list_of_widgets = list(self.children.values())
-        while len(list_of_widgets) != 0:
-            widget = list_of_widgets.pop()
-            list_of_widgets.extend(widget.children.values())
-            self._add_bindtag(widget)
+        self.place(x=x, y=y)
+        
+        # Binding events on the frame itself
+        self.bind("<ButtonPress-1>", self._on_selection)
+        self.bind("<B1-Motion>", self._on_drag)
+        self.bind("<ButtonRelease-1>", self._on_drop)
+        
+        # Recursively bind children so drag works anywhere on item
+        self._bind_children(self)
 
-    def _add_bindtag(self, widget):
-        bindtags = widget.bindtags()
-        if self._tag not in bindtags:
-            widget.bindtags((self._tag,) + bindtags)
+    def _bind_children(self, widget):
+        for child in widget.winfo_children():
+            # Avoid overwriting existing bindings if buttons etc?
+            # ctk buttons have their own events. 
+            # We generally want drag on Frame/Label, not Button which has action.
+            if not isinstance(child, (ctk.CTkButton, ctk.CTkEntry, ctk.CTkCheckBox, ctk.CTkSwitch)):
+                child.bind("<ButtonPress-1>", self._on_selection)
+                child.bind("<B1-Motion>", self._on_drag)
+                child.bind("<ButtonRelease-1>", self._on_drop)
+                self._bind_children(child)
 
     def _on_selection(self, event):
         self.tkraise()
@@ -54,13 +59,19 @@ class Item(Frame):
             self._selection_handler(self)
 
     def _on_drag(self, event):
-        self.master.update_idletasks()
-        self._x += event.x_root - self._move_lastx
-        self._y += event.y_root - self._move_lasty
+        # Event coordinates are relative to widget, but x_root/y_root are screen
+        # We move based on delta
+        dx = event.x_root - self._move_lastx
+        dy = event.y_root - self._move_lasty
+        self._x += dx
+        self._y += dy
         self._move_lastx = event.x_root
         self._move_lasty = event.y_root
         self.place_configure(x=self._x, y=self._y)
+        
         if self._drag_handler:
+            # We might want to pass x, y relative to container?
+            # The logic in DDList needs x,y. _x, _y are correct vars.
             self._drag_handler(self._x, self._y)
 
     def _on_drop(self, event):
@@ -79,31 +90,37 @@ class Item(Frame):
 
 
 # -----------------------------
-# DDList class (thêm callback)
+# DDList class
 # -----------------------------
-class DDList(Frame):
+class DDList(ctk.CTkFrame):
     def __init__(self, master, item_width, item_height, item_relief=None, item_background=None, item_borderwidth=None,
                  offset_x=0, offset_y=0, gap=0, reorder_callback=None, **kwargs):
-        kwargs["width"] = item_width + offset_x * 2
-        kwargs["height"] = offset_y * 2
-        Frame.__init__(self, master, **kwargs)
+        # Calculate size required? No, we set via place or pack in parent. 
+        # But we need to manage internal height for scrolling if parent is scrollable.
+        # However, DDList places items absolutely inside itself. 
+        # So DDList must be big enough.
+        
+        # We init with minimal size or specific size?
+        # logic: kwargs["width"] = item_width + offset_x * 2
+        # CTkFrame kwargs might differ.
+        super().__init__(master, **kwargs)
+        
+        # Set colors if provided
+        if item_background:
+            self.configure(fg_color=item_background)
+            
         self._item_borderwidth = item_borderwidth
-        self._item_relief = item_relief
-        self._item_background = item_background
+        self._item_relief = item_relief # Not fully used in CTkFrame same way
         self._item_width = item_width
         self._item_height = item_height
         self._offset_x = offset_x
         self._offset_y = offset_y
-        self._left = offset_x
-        self._top = offset_y
-        self._right = self._offset_x + self._item_width
-        self._bottom = self._offset_y
         self._gap = gap
         self._list_of_items = []
         self._position = {}
         self._index_of_selected_item = None
         self._index_of_empty_container = None
-        self._reorder_callback = reorder_callback  # ✅ callback khi reorder
+        self._reorder_callback = reorder_callback
 
     def add_item(self, item, index=None):
         if index is None:
@@ -119,7 +136,8 @@ class DDList(Frame):
         self._position[item] = index
         item.init(self, x, y)
         self._bottom = self._offset_y + len(self._list_of_items) * (self._item_height + self._gap)
-        self.configure(height=self._bottom)
+        self.configure(height=self._bottom) 
+        # Important: set height so parent scrollable frame knows size if packed
         return item
 
     def _on_item_selected(self, item):
@@ -127,9 +145,12 @@ class DDList(Frame):
         self._index_of_empty_container = self._index_of_selected_item
 
     def _on_item_dragged(self, x, y):
+        # Calculate which index we are hovering over
+        # y is relative to DDList top
         quotient, remainder = divmod(y - self._offset_y, self._item_height + self._gap)
-        if remainder < self._item_height:
-            new_container = max(0, min(quotient, len(self._list_of_items) - 1))
+        # tolerance for overlap? simplified logic from original
+        if remainder < self._item_height + self._gap: # check range
+            new_container = max(0, min(int(quotient), len(self._list_of_items) - 1))
             if new_container != self._index_of_empty_container:
                 if new_container > self._index_of_empty_container:
                     for index in range(self._index_of_empty_container + 1, new_container + 1):
@@ -142,22 +163,22 @@ class DDList(Frame):
                 self._index_of_empty_container = new_container
 
     def _on_item_dropped(self):
-        """Xử lý reorder + callback cập nhật list gốc"""
         if self._index_of_selected_item is None:
             return
         item = self._list_of_items.pop(self._index_of_selected_item)
         self._list_of_items.insert(self._index_of_empty_container, item)
-        # cập nhật vị trí hiển thị
+        
         for i, it in enumerate(self._list_of_items):
             x = self._offset_x
-            y = self._offset_y + i * (self._item_height + self._gap)
+            y = self._offset_y + i * (self._item_height + 3.4 * self._gap)
             it.set_position(x, y)
             self._position[it] = i
-        # gọi callback nếu có
+
         if self._reorder_callback:
+            # We assume item.value contains the clip data
             new_order = [it.value for it in self._list_of_items]
             self._reorder_callback(new_order)
-        # reset
+
         self._index_of_selected_item = None
         self._index_of_empty_container = None
 
@@ -171,13 +192,15 @@ class ClipItem(Item):
                          selection_handler=master._on_item_selected,
                          drag_handler=master._on_item_dragged,
                          drop_handler=master._on_item_dropped,
+                         fg_color=("gray90", "gray20"), # Light/Dark mode colors
+                         corner_radius=6,
                          **kwargs)
         self.app_ref = app_ref
         self.clip = clip
 
-        frame = ttk.Frame(self, padding=5)
-        frame.pack(fill="both", expand=True)
-
+        # Layout inside the item
+        # Use grid or pack. Pack is easier for left-to-right.
+        
         # Thumbnail
         try:
             img = Image.open(clip["thumb_path"])
@@ -187,46 +210,31 @@ class ClipItem(Item):
             draw = ImageDraw.Draw(img)
             draw.text((10, 25), "No Thumb", fill="white")
 
-        photo = ImageTk.PhotoImage(img)
-        thumb_label = ttk.Label(frame, image=photo)
-        thumb_label.image = photo
-        thumb_label.pack(side="left", padx=5)
-        self.app_ref._image_references.append(photo)
-
+        photo = ctk.CTkImage(light_image=img, dark_image=img, size=THUMBNAIL_SIZE)
+        # Using CTkImage for high DPI support
+        
+        thumb_label = ctk.CTkLabel(self, image=photo, text="")
+        thumb_label.image = photo # Keep ref? CTkImage usually handles it but good practice.
+        thumb_label.pack(side="left", padx=5, pady=5)
+        
+        # We need to keep ref in app logic if used elsewhere, 
+        # but CTkImage helps. Original code stored in self.app_ref._image_references.
+        # We can still do that.
+        # self.app_ref._image_references.append(photo) 
+        # Note: CTkImage object, not ImageTk.PhotoImage.
+        
         # Checkbox
-        check = ttk.Checkbutton(frame, variable=clip["var"])
+        # ctk checkbox uses variable (IntVar or BooleanVar, compatible)
+        check = ctk.CTkCheckBox(self, variable=clip["var"], text="", width=24, command=lambda: self.app_ref.toggle_select_clip(self.app_ref.imported_clips.index(clip)))
         check.pack(side="left", padx=5)
-        check.configure(command=lambda: self.app_ref.toggle_select_clip(self.app_ref.imported_clips.index(clip)))
 
-        # Thông tin
+        # Info
         info_text = f"{os.path.basename(clip['path'])}\n[{self.app_ref.format_time(clip['duration'])}]"
-        info_label = ttk.Label(frame, text=info_text, justify="left", font=("Arial", 8))
+        info_label = ctk.CTkLabel(self, text=info_text, justify="left", font=("Arial", 12))
         info_label.pack(side="left", fill="x", expand=True, padx=5)
-
-        # Nút Play
-        play_btn = ttk.Button(frame, text="▶", width=4)
+        
+        # Buttons
+        play_btn = ctk.CTkButton(self, text="▶", width=30)
         play_btn.pack(side="right", padx=5)
         play_btn.configure(command=lambda p=clip["path"]: self.app_ref._open_in_default_player(p))
 
-
-# -----------------------------
-# Hàm render clip list (bạn gọi cái này trong app)
-# -----------------------------
-def render_clip_list(self):
-    for child in self.media_items_frame.winfo_children():
-        child.destroy()
-
-    def on_reorder(new_order):
-        """Callback khi reorder -> cập nhật self.imported_clips"""
-        self.imported_clips = new_order
-
-    ddlist = DDList(self.media_items_frame, item_width=600, item_height=80, item_relief="groove",
-                    item_borderwidth=1, item_background="#2f2f2f", offset_x=5, offset_y=5, gap=5,
-                    reorder_callback=on_reorder)
-    ddlist.pack(fill="both", expand=True)
-
-    for clip in self.imported_clips:
-        item = ClipItem(ddlist, clip, 600, 80, self)
-        ddlist.add_item(item)
-
-    self.ddlist = ddlist
