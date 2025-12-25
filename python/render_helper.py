@@ -257,6 +257,13 @@ def generate_ffmpeg_command(config_path):
         out_path
     ])
     
+    # In ra command ffmpeg để debug
+    print("\n" + "="*80)
+    print("🎬 FFMPEG COMMAND:")
+    print("="*80)
+    print(" ".join(shlex.quote(str(arg)) for arg in cmd_args))
+    print("="*80 + "\n")
+    
     try:
         subprocess.run(cmd_args, check=True)
         # Tìm root window để messagebox hiển thị phía trên
