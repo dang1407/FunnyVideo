@@ -11,7 +11,7 @@ import subprocess
 import os
 import sys
 
-from python.consts import TEMP_DIR
+from consts import TEMP_DIR
 
 # ==========================================
 # CẤU HÌNH
