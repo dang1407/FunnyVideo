@@ -11,13 +11,10 @@ import subprocess
 import os
 import sys
 
-from consts import TEMP_DIR
-
 # ==========================================
 # CẤU HÌNH
 # ==========================================
 FFMPEG_EXEC = "ffmpeg"
-MAX_CLIPS_DIRECT = 10  # Số clips tối đa để render trực tiếp, nhiều hơn sẽ dùng file tạm
 
 
 def get_input_index(file_path, input_map, inputs_list):
@@ -27,172 +24,13 @@ def get_input_index(file_path, input_map, inputs_list):
     return input_map[file_path]
 
 
-def render_clip_to_temp(clip, clip_idx, width, height, fps, temp_dir):
-    """
-    Render một clip riêng lẻ ra file tạm
-    Returns: (temp_file_path, has_audio)
-    """
-    import tempfile
-    
-    temp_file = os.path.join(temp_dir, f"clip_{clip_idx:04d}.mp4")
-    
-    layers = clip.get('layers', [])
-    main_video_layer = next((l for l in layers if l['type'] == 'video'), None)
-    fill_color_layer = next((l for l in layers if l['type'] == 'fill-color'), None)
-    
-    input_map = {}
-    inputs_list = []
-    filter_chains = []
-    
-    transition_layers = []
-    logo_layers = []
-    
-    for layer in layers:
-        if layer == main_video_layer or layer == fill_color_layer:
-            continue
-        if layer['type'] == 'video':
-            transition_layers.append(layer)
-        elif layer['type'] == 'image-overlay':
-            logo_layers.append(layer)
-    
-    has_audio = False
-    current_v_pad = None
-    
-    # Tạo base layer
-    if main_video_layer:
-        path = main_video_layer['path']
-        idx = get_input_index(path, input_map, inputs_list)
-        cut_from = main_video_layer.get('cutFrom', 0)
-        cut_to = main_video_layer.get('cutTo')
-        
-        trim_cmd = f"[{idx}:v]trim=start={cut_from}"
-        if cut_to:
-            trim_cmd += f":end={cut_to}"
-        trim_cmd += f",setpts=PTS-STARTPTS[v_raw]"
-        filter_chains.append(trim_cmd)
-        
-        has_audio = True
-        atrim_cmd = f"[{idx}:a]atrim=start={cut_from}"
-        if cut_to:
-            atrim_cmd += f":end={cut_to}"
-        atrim_cmd += f",asetpts=PTS-STARTPTS[a_out]"
-        filter_chains.append(atrim_cmd)
-        
-        if main_video_layer.get('resizeMode') == 'contain-blur':
-            bg_chain = (f"[v_raw]split=2[bg][fg];"
-                        f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},boxblur=20:10[bg_blur];"
-                        f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[fg_scaled];"
-                        f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2[v_base]")
-            filter_chains.append(bg_chain)
-            current_v_pad = "[v_base]"
-        else:
-            scale_cmd = f"[v_raw]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}[v_base]"
-            filter_chains.append(scale_cmd)
-            current_v_pad = "[v_base]"
-    
-    elif fill_color_layer:
-        color = fill_color_layer.get('color', '#000000')
-        dur = clip.get('duration', 0.1)
-        color_cmd = f"color=c={color}:s={width}x{height}:d={dur}[v_base]"
-        filter_chains.append(color_cmd)
-        current_v_pad = "[v_base]"
-        
-        silence_cmd = f"anullsrc=cl=stereo:r=44100:d={dur}[a_out]"
-        filter_chains.append(silence_cmd)
-        has_audio = True
-    
-    # Overlay logos
-    for logo_idx, layer in enumerate(logo_layers):
-        path = layer['path']
-        idx = get_input_index(path, input_map, inputs_list)
-        layer_pad = f"logo_{logo_idx}"
-        
-        # Bỏ loop filter, chỉ scale logo PNG với format tương thích
-        cmd = f"[{idx}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,format=yuva420p[{layer_pad}]"
-        filter_chains.append(cmd)
-        
-        next_pad = f"v_logo_{logo_idx}"
-        # Bỏ shortest=1, overlay tự động kéo dài theo video base
-        overlay_cmd = f"{current_v_pad}[{layer_pad}]overlay=(W-w)/2:(H-h)/2[{next_pad}]"
-        filter_chains.append(overlay_cmd)
-        current_v_pad = f"[{next_pad}]"
-    
-    # Overlay transitions
-    for trans_idx, layer in enumerate(transition_layers):
-        path = layer['path']
-        idx = get_input_index(path, input_map, inputs_list)
-        layer_pad = f"trans_{trans_idx}"
-        
-        cut_from = layer.get('cutFrom', 0)
-        cut_to = layer.get('cutTo')
-        start_time = layer.get('start', 0)
-        stop_time = layer.get('stop')
-        
-        trim_part = f"[{idx}:v]trim=start={cut_from}"
-        if cut_to:
-            trim_part += f":end={cut_to}"
-        trim_part += f",setpts=PTS-STARTPTS[{layer_pad}_raw]"
-        filter_chains.append(trim_part)
-        
-        scale_trans = f"[{layer_pad}_raw]scale={width}:{height}[{layer_pad}]"
-        filter_chains.append(scale_trans)
-        
-        fps_fix = f"[{layer_pad}]setpts=PTS+{start_time}/TB[{layer_pad}_shifted]"
-        filter_chains.append(fps_fix)
-        
-        enable_expr = f"enable='between(t,{start_time},{stop_time})'"
-        next_pad = f"v_trans_{trans_idx}"
-        overlay_cmd = f"{current_v_pad}[{layer_pad}_shifted]overlay=0:0:{enable_expr}[{next_pad}]"
-        filter_chains.append(overlay_cmd)
-        current_v_pad = f"[{next_pad}]"
-    
-    # Finalize
-    filter_chains.append(f"{current_v_pad}setsar=1,fps={fps}[v_out]")
-    
-    # Build command
-    cmd_args = [FFMPEG_EXEC, "-y"]
-    for inp in inputs_list:
-        cmd_args.extend(["-i", inp])
-    
-    cmd_args.extend(["-filter_complex", ";".join(filter_chains)])
-    cmd_args.extend(["-map", "[v_out]"])
-    
-    if has_audio:
-        cmd_args.extend(["-map", "[a_out]"])
-    
-    cmd_args.extend([
-        "-c:v", "h264_nvenc",
-        "-preset", "p4",
-        "-cq", "23",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        temp_file
-    ])
-    
-    print(f"  Rendering clip {clip_idx + 1}...")
-    subprocess.run(cmd_args, check=True, capture_output=True)
-    
-    return temp_file, has_audio
-
-
 def generate_ffmpeg_command(config_path):
     with open(config_path, 'r', encoding='utf-8') as f:
-            json_data = json.load(f)
+        json_data = json.load(f)
     width = json_data.get('width', 1920)
     height = json_data.get('height', 1080)
     fps = json_data.get('fps', 25)
     out_path = json_data.get('outPath', 'output.mp4')
-    
-    num_clips = len(json_data.get('clips', []))
-    
-    # Nếu có quá nhiều clips, dùng phương pháp render từng clip ra file tạm
-    if num_clips > MAX_CLIPS_DIRECT:
-        print(f"\n⚠️  Phát hiện {num_clips} clips (nhiều hơn {MAX_CLIPS_DIRECT})")
-        print("📌 Sử dụng phương pháp render tối ưu (từng clip -> concat)\n")
-        return generate_ffmpeg_command_optimized(config_path)
-    
-    # Số clips ít, dùng phương pháp cũ (trực tiếp)
-    print(f"\n📌 Render {num_clips} clips trực tiếp\n")
 
     input_map = {}
     inputs_list = []
@@ -304,15 +142,14 @@ def generate_ffmpeg_command(config_path):
             idx = get_input_index(path, input_map, inputs_list)
             layer_pad = f"logo_{i}_{logo_idx}"
 
-            # Bỏ loop filter, chỉ scale logo PNG với format tương thích
-            cmd = f"[{idx}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,format=yuva420p[{layer_pad}]"
+            # Thêm loop để logo không bị hết, scale về kích thước canvas
+            cmd = f"[{idx}:v]loop=loop=-1:size=1:start=0,scale={width}:{height}:force_original_aspect_ratio=decrease[{layer_pad}]"
             filter_chains.append(cmd)
 
             # Logo luôn hiển thị, không cần enable condition phức tạp
             # Transition sẽ tự động che logo khi xuất hiện
             next_pad = f"v_clip_{i}_logo_{logo_idx}"
-            # Bỏ shortest=1, overlay tự động kéo dài theo video base
-            overlay_cmd = f"{current_v_pad}[{layer_pad}]overlay=(W-w)/2:(H-h)/2[{next_pad}]"
+            overlay_cmd = f"{current_v_pad}[{layer_pad}]overlay=(W-w)/2:(H-h)/2:shortest=1[{next_pad}]"
             filter_chains.append(overlay_cmd)
             current_v_pad = f"[{next_pad}]"
 
@@ -419,14 +256,7 @@ def generate_ffmpeg_command(config_path):
         "-r", str(fps),
         out_path
     ])
-    
-    # In ra command ffmpeg để debug
-    print("\n" + "="*80)
-    print("🎬 FFMPEG COMMAND:")
-    print("="*80)
-    print(" ".join(shlex.quote(str(arg)) for arg in cmd_args))
-    print("="*80 + "\n")
-    
+
     try:
         subprocess.run(cmd_args, check=True)
         # Tìm root window để messagebox hiển thị phía trên
@@ -435,7 +265,8 @@ def generate_ffmpeg_command(config_path):
             for widget in root.winfo_children():
                 if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
                     widget.attributes('-topmost', True)
-                    messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}", parent=widget)
+                    messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}",
+                                        parent=widget)
                     widget.attributes('-topmost', False)
                     break
             else:
@@ -449,232 +280,19 @@ def generate_ffmpeg_command(config_path):
             for widget in root.winfo_children():
                 if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
                     widget.attributes('-topmost', True)
-                    messagebox.showerror("Lỗi render", f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.", parent=widget)
+                    messagebox.showerror("Lỗi render",
+                                         f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.",
+                                         parent=widget)
                     widget.attributes('-topmost', False)
                     break
             else:
-                messagebox.showerror("Lỗi render", f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.")
+                messagebox.showerror("Lỗi render",
+                                     f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.")
         else:
-            messagebox.showerror("Lỗi render", f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.")
+            messagebox.showerror("Lỗi render",
+                                 f"FFmpeg render thất bại!\n\nMã lỗi: {e.returncode}\n\nVui lòng kiểm tra console để xem chi tiết lỗi.")
         raise
 
-def generate_ffmpeg_command_optimized(config_path):
-    """
-    Phương pháp tối ưu cho nhiều clips: render từng clip ra file tạm, sau đó concat
-    """
-    with open(config_path, 'r', encoding='utf-8') as f:
-        json_data = json.load(f)
-    
-    width = json_data.get('width', 1920)
-    height = json_data.get('height', 1080)
-    fps = json_data.get('fps', 25)
-    out_path = json_data.get('outPath', 'output.mp4')
-    clips = json_data.get('clips', [])
-    audio_tracks = json_data.get('audioTracks', [])
-    
-    # Tạo thư mục tạm trong folder dự án
-    import uuid
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    
-    temp_dir = os.path.join(TEMP_DIR, f"ffmpeg_render_{uuid.uuid4().hex[:8]}")
-    os.makedirs(temp_dir, exist_ok=True)
-    print(f"📁 Thư mục tạm: {temp_dir}\n")
-    
-    try:
-        # Bước 1: Render từng clip ra file tạm
-        print("="*80)
-        print(f"🎬 BƯỚC 1: RENDER {len(clips)} CLIPS RIÊNG LẺ")
-        print("="*80)
-        
-        temp_clips = []
-        for i, clip in enumerate(clips):
-            temp_file, has_audio = render_clip_to_temp(clip, i, width, height, fps, temp_dir)
-            temp_clips.append(temp_file)
-        
-        print(f"\n✅ Đã render xong {len(temp_clips)} clips\n")
-        
-        # Bước 2: Tạo concat list file
-        print("="*80)
-        print("🎬 BƯỚC 2: GHÉP CÁC CLIPS")
-        print("="*80)
-        
-        concat_list_file = os.path.join(temp_dir, "concat_list.txt")
-        with open(concat_list_file, 'w', encoding='utf-8') as f:
-            for temp_file in temp_clips:
-                # Escape single quotes trong path nếu có
-                safe_path = temp_file.replace("'", "'\\''")
-                f.write(f"file '{safe_path}'\n")
-        
-        print(f"📝 Đã tạo concat list: {concat_list_file}")
-        
-        # Bước 3: Concat video (chưa có audio tracks)
-        temp_concat_video = os.path.join(temp_dir, "concat_video.mp4")
-        
-        concat_cmd = [
-            FFMPEG_EXEC, "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_list_file,
-            "-c", "copy",
-            temp_concat_video
-        ]
-        
-        print("\n📌 Command concat:")
-        print(" ".join(shlex.quote(str(arg)) for arg in concat_cmd))
-        print()
-        
-        subprocess.run(concat_cmd, check=True, capture_output=True)
-        print("✅ Đã ghép video\n")
-        
-        # Bước 4: Mix audio tracks nếu có
-        if audio_tracks:
-            print("="*80)
-            print("🎬 BƯỚC 3: MIX AUDIO TRACKS")
-            print("="*80)
-            
-            input_map = {}
-            inputs_list = []
-            filter_chains = []
-            
-            # Main audio từ video
-            idx_main = get_input_index(temp_concat_video, input_map, inputs_list)
-            mix_inputs = [f"[{idx_main}:a]"]
-            
-            # Nhóm audio tracks theo file path để tối ưu
-            tracks_by_file = {}
-            for track in audio_tracks:
-                path = track['path']
-                if path not in tracks_by_file:
-                    tracks_by_file[path] = []
-                tracks_by_file[path].append(track)
-            
-            # Xử lý từng file audio
-            file_idx = 0
-            for path, tracks in tracks_by_file.items():
-                idx = get_input_index(path, input_map, inputs_list)
-                
-                # Nếu có nhiều tracks từ cùng 1 file, mix theo cascade (từng cặp)
-                if len(tracks) > 1:
-                    # Tạo các phần audio riêng
-                    track_parts = []
-                    for k, track in enumerate(tracks):
-                        start = track.get('start', 0)
-                        cut_from = track.get('cutFrom', 0)
-                        cut_to = track.get('cutTo')
-                        mix_vol = track.get('mixVolume', 1)
-                        
-                        part_pad = f"file_{file_idx}_part_{k}"
-                        
-                        cmd = f"[{idx}:a]atrim=start={cut_from}"
-                        if cut_to:
-                            cmd += f":end={cut_to}"
-                        cmd += f",asetpts=PTS-STARTPTS,volume={mix_vol},adelay={int(start * 1000)}|{int(start * 1000)}[{part_pad}]"
-                        filter_chains.append(cmd)
-                        track_parts.append(part_pad)
-                    
-                    # Mix theo cascade: mỗi lần mix 2 tracks để tránh giới hạn
-                    current_pad = track_parts[0]
-                    for i in range(1, len(track_parts)):
-                        next_pad = f"file_{file_idx}_mix_{i}"
-                        if i == len(track_parts) - 1:
-                            # Lần mix cuối cùng
-                            next_pad = f"file_{file_idx}_merged"
-                        mix_cmd = f"[{current_pad}][{track_parts[i]}]amix=inputs=2:duration=first:dropout_transition=0[{next_pad}]"
-                        filter_chains.append(mix_cmd)
-                        current_pad = next_pad
-                    
-                    mix_inputs.append(f"[{current_pad}]")
-                else:
-                    # Chỉ 1 track từ file này
-                    track = tracks[0]
-                    start = track.get('start', 0)
-                    cut_from = track.get('cutFrom', 0)
-                    cut_to = track.get('cutTo')
-                    mix_vol = track.get('mixVolume', 1)
-                    
-                    track_pad = f"file_{file_idx}_single"
-                    
-                    cmd = f"[{idx}:a]atrim=start={cut_from}"
-                    if cut_to:
-                        cmd += f":end={cut_to}"
-                    cmd += f",asetpts=PTS-STARTPTS,volume={mix_vol},adelay={int(start * 1000)}|{int(start * 1000)}[{track_pad}]"
-                    filter_chains.append(cmd)
-                    mix_inputs.append(f"[{track_pad}]")
-                
-                file_idx += 1
-            
-            # Mix main audio với transition audio (chỉ 2 inputs)
-            mix_cmd = "".join(mix_inputs) + f"amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0[final_audio]"
-            filter_chains.append(mix_cmd)
-            
-            # Final mix command
-            final_cmd = [FFMPEG_EXEC, "-y"]
-            for inp in inputs_list:
-                final_cmd.extend(["-i", inp])
-            
-            final_cmd.extend(["-filter_complex", ";".join(filter_chains)])
-            final_cmd.extend(["-map", f"{idx_main}:v", "-map", "[final_audio]"])
-            final_cmd.extend([
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                out_path
-            ])
-            
-            print("\n📌 Command mix audio:")
-            print(" ".join(shlex.quote(str(arg)) for arg in final_cmd))
-            print()
-            
-            subprocess.run(final_cmd, check=True, capture_output=True)
-            print("✅ Đã mix audio\n")
-        else:
-            # Không có audio tracks, chỉ cần copy
-            import shutil
-            shutil.copy2(temp_concat_video, out_path)
-        
-        print("="*80)
-        print("✅ RENDER THÀNH CÔNG!")
-        print(f"📁 Output: {out_path}")
-        print("="*80 + "\n")
-        
-        # Success message
-        root = tk._default_root
-        if root:
-            for widget in root.winfo_children():
-                if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
-                    widget.attributes('-topmost', True)
-                    messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}", parent=widget)
-                    widget.attributes('-topmost', False)
-                    break
-            else:
-                messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
-        else:
-            messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
-    
-    except Exception as e:
-        print(f"\n❌ LỖI: {e}\n")
-        root = tk._default_root
-        if root:
-            for widget in root.winfo_children():
-                if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
-                    widget.attributes('-topmost', True)
-                    messagebox.showerror("Lỗi render", f"Render thất bại!\n\n{str(e)}", parent=widget)
-                    widget.attributes('-topmost', False)
-                    break
-            else:
-                messagebox.showerror("Lỗi render", f"Render thất bại!\n\n{str(e)}")
-        else:
-            messagebox.showerror("Lỗi render", f"Render thất bại!\n\n{str(e)}")
-        raise
-    finally:
-        # Dọn dẹp file tạm
-        import shutil
-        if os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"🗑️  Đã xóa thư mục tạm: {temp_dir}")
-            except Exception as e:
-                print(f"⚠️  Không thể xóa thư mục tạm: {e}")
 
 def run(cmd):
     print("⚙️ Run:", " ".join(shlex.quote(c) for c in cmd))
