@@ -1,10 +1,9 @@
 import datetime
-import os
 import random
 import subprocess
 import json
-import json
 import os
+from tkinter import messagebox
 
 def get_clip_duration(clip_path: str) -> float:
     """
@@ -61,7 +60,7 @@ def select_clips(topic: str, target_time: float, used_videos: list) -> list:
     # Loại bỏ clip đã dùng
     available_clips = [clip for clip in all_clips if clip not in used_video_paths]
     if not available_clips:
-        raise ValueError("Không còn clip mới để chọn!")
+        messagebox.showerror("Lỗi", "Không còn clip mới để chọn!")
 
     # Chọn ngẫu nhiên cho đến khi đủ thời lượng
     selected = []
