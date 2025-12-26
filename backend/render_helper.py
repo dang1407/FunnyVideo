@@ -11,6 +11,8 @@ import subprocess
 import os
 import sys
 
+from consts import TEMP_DIR
+
 # ==========================================
 # CẤU HÌNH
 # ==========================================
@@ -105,11 +107,13 @@ def render_clip_to_temp(clip, clip_idx, width, height, fps, temp_dir):
         idx = get_input_index(path, input_map, inputs_list)
         layer_pad = f"logo_{logo_idx}"
         
-        cmd = f"[{idx}:v]loop=loop=-1:size=1:start=0,scale={width}:{height}:force_original_aspect_ratio=decrease[{layer_pad}]"
+        # Bỏ loop filter, chỉ scale logo PNG với format tương thích
+        cmd = f"[{idx}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,format=yuva420p[{layer_pad}]"
         filter_chains.append(cmd)
         
         next_pad = f"v_logo_{logo_idx}"
-        overlay_cmd = f"{current_v_pad}[{layer_pad}]overlay=(W-w)/2:(H-h)/2:shortest=1[{next_pad}]"
+        # Bỏ shortest=1, overlay tự động kéo dài theo video base
+        overlay_cmd = f"{current_v_pad}[{layer_pad}]overlay=(W-w)/2:(H-h)/2[{next_pad}]"
         filter_chains.append(overlay_cmd)
         current_v_pad = f"[{next_pad}]"
     
@@ -300,14 +304,15 @@ def generate_ffmpeg_command(config_path):
             idx = get_input_index(path, input_map, inputs_list)
             layer_pad = f"logo_{i}_{logo_idx}"
 
-            # Thêm loop để logo không bị hết, scale về kích thước canvas
-            cmd = f"[{idx}:v]loop=loop=-1:size=1:start=0,scale={width}:{height}:force_original_aspect_ratio=decrease[{layer_pad}]"
+            # Bỏ loop filter, chỉ scale logo PNG với format tương thích
+            cmd = f"[{idx}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,format=yuva420p[{layer_pad}]"
             filter_chains.append(cmd)
 
             # Logo luôn hiển thị, không cần enable condition phức tạp
             # Transition sẽ tự động che logo khi xuất hiện
             next_pad = f"v_clip_{i}_logo_{logo_idx}"
-            overlay_cmd = f"{current_v_pad}[{layer_pad}]overlay=(W-w)/2:(H-h)/2:shortest=1[{next_pad}]"
+            # Bỏ shortest=1, overlay tự động kéo dài theo video base
+            overlay_cmd = f"{current_v_pad}[{layer_pad}]overlay=(W-w)/2:(H-h)/2[{next_pad}]"
             filter_chains.append(overlay_cmd)
             current_v_pad = f"[{next_pad}]"
 
@@ -467,9 +472,12 @@ def generate_ffmpeg_command_optimized(config_path):
     clips = json_data.get('clips', [])
     audio_tracks = json_data.get('audioTracks', [])
     
-    # Tạo thư mục tạm
-    import tempfile
-    temp_dir = tempfile.mkdtemp(prefix="ffmpeg_render_")
+    # Tạo thư mục tạm trong folder dự án
+    import uuid
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    
+    temp_dir = os.path.join(TEMP_DIR, f"ffmpeg_render_{uuid.uuid4().hex[:8]}")
+    os.makedirs(temp_dir, exist_ok=True)
     print(f"📁 Thư mục tạm: {temp_dir}\n")
     
     try:

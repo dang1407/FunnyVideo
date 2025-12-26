@@ -10,6 +10,7 @@ from tkinter import ttk
 from editor_ui import EditorWindow, load_json, get_used_videos_path
 from clip_selector import select_clips
 from render_history_window import ClipViewerApp
+from video_manager_ui import open_video_manager
 from helper import get_video_info
 
 # --- Quản lý đường dẫn ---
@@ -195,19 +196,25 @@ class ChannelSelectorApp(Tk):
         self.save_button = ctk.CTkButton(action_frame, text="Lưu thay đổi", command=self._save_config, state="disabled")
         self.save_button.pack(side="left", padx=5)
 
-        # Open Editor Buttons
+        # Open Editor Buttons - Using Grid for better control
         editor_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         editor_frame.pack(fill="x", padx=10, pady=20)
+        editor_frame.grid_columnconfigure(0, weight=1)
         
         self.open_editor_button = ctk.CTkButton(
             editor_frame, text="Chọn Clips & Dựng Video →", command=self._open_editor_window, height=40, font=("Arial", 14, "bold")
         )
-        self.open_editor_button.pack(fill="x", pady=5)
+        self.open_editor_button.grid(row=0, column=0, sticky="ew", pady=5)
         
         self.render_old_clip_button = ctk.CTkButton(
             editor_frame, text="Render clip cũ →", command=self._open_render_history_window, height=40, font=("Arial", 14, "bold")
         )
-        self.render_old_clip_button.pack(fill="x", pady=5)
+        self.render_old_clip_button.grid(row=1, column=0, sticky="ew", pady=5)
+        
+        self.video_manager_button = ctk.CTkButton(
+            editor_frame, text="📹 Quản lý Video", command=self._open_video_manager, height=40, font=("Arial", 14, "bold"), fg_color="purple"
+        )
+        self.video_manager_button.grid(row=2, column=0, sticky="ew", pady=5)
 
     # Callbacks needed for CTkComboBox (command arg passes value, but bound variable also updates. 
     # original code used bind <<ComboboxSelected>>)
@@ -257,6 +264,16 @@ class ChannelSelectorApp(Tk):
             messagebox.showwarning("Chưa chọn kênh", "Vui lòng chọn một kênh trước.")
             return
         ClipViewerApp(self, selected_channel_name)
+    
+    def _open_video_manager(self):
+        """Mở cửa sổ quản lý video"""
+        selected_channel_name = self.selected_channel.get()
+        if not selected_channel_name or "Không có kênh" in selected_channel_name:
+            messagebox.showwarning("Chưa chọn kênh", "Vui lòng chọn một kênh trước.")
+            return
+        
+        self.withdraw()
+        open_video_manager(self, selected_channel_name)
 
     def _create_new_channel(self):
         dialog = ChannelCreationDialog(self, "Tạo kênh mới", self.initial_config_template)

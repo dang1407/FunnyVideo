@@ -7,11 +7,11 @@ from tkinterdnd2 import DND_FILES
 import json
 import subprocess
 import threading
-from python.clip_selector import save_used_videos, save_render_history
+from clip_selector import save_used_videos, save_render_history
 from DragSortHelper import DDList, ClipItem
-from python.consts import *
-from python.helper import load_channel_path, get_video_info
-from python.render_helper import build_and_render_from_config, generate_ffmpeg_command
+from consts import *
+from helper import load_channel_path, get_video_info
+from render_helper import build_and_render_from_config, generate_ffmpeg_command
 
 try:
     from Tkinter import Tk, IntVar, Label, Entry, Button

@@ -215,15 +215,19 @@ class ClipViewerApp(ctk.CTkToplevel):
             messagebox.showerror("Error", "Data sync error")
 
     def _read_history_year_in_folder(self, history_folder_path):
-        return read_all_folder_name(history_folder_path)
+        result = read_all_folder_name(history_folder_path)
+        return result if result is not None else []
 
     def _read_history_month_in_year(self, history_folder_path, year=None):
         if year is None: year = datetime.datetime.now().year
         folder_path = os.path.join(history_folder_path, str(year))
-        return read_all_folder_name(folder_path)
+        result = read_all_folder_name(folder_path)
+        return result if result is not None else []
 
     def _read_history_file_in_month(self, history_folder_path, year, month=None):
         if month is None: month = datetime.datetime.now().month
         folder_path = os.path.join(history_folder_path, str(year), str(month))
         file_names_raw = read_all_file_name(folder_path)
+        if file_names_raw is None:
+            return []
         return [f.replace(".json", "") for f in file_names_raw]
