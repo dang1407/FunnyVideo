@@ -540,29 +540,63 @@ def generate_ffmpeg_command_optimized(config_path):
             idx_main = get_input_index(temp_concat_video, input_map, inputs_list)
             mix_inputs = [f"[{idx_main}:a]"]
             
-            # Các audio tracks thêm vào
-            for k, track in enumerate(audio_tracks):
+            # Nhóm audio tracks theo file path để tối ưu
+            tracks_by_file = {}
+            for track in audio_tracks:
                 path = track['path']
-                idx = get_input_index(path, input_map, inputs_list)
-                start = track.get('start', 0)
-                cut_from = track.get('cutFrom', 0)
-                cut_to = track.get('cutTo')
-                mix_vol = track.get('mixVolume', 1)
-                
-                track_pad = f"track_{k}"
-                delayed_pad = f"track_{k}_delayed"
-                
-                cmd = f"[{idx}:a]atrim=start={cut_from}"
-                if cut_to:
-                    cmd += f":end={cut_to}"
-                cmd += f",asetpts=PTS-STARTPTS,volume={mix_vol}[{track_pad}]"
-                filter_chains.append(cmd)
-                
-                delay_ms = int(start * 1000)
-                delay_cmd = f"[{track_pad}]adelay={delay_ms}|{delay_ms}[{delayed_pad}]"
-                filter_chains.append(delay_cmd)
-                mix_inputs.append(f"[{delayed_pad}]")
+                if path not in tracks_by_file:
+                    tracks_by_file[path] = []
+                tracks_by_file[path].append(track)
             
+            # Xử lý từng file audio
+            file_idx = 0
+            for path, tracks in tracks_by_file.items():
+                idx = get_input_index(path, input_map, inputs_list)
+                
+                # Nếu có nhiều tracks từ cùng 1 file, gộp lại trước
+                if len(tracks) > 1:
+                    # Tạo các phần audio riêng và gộp chúng
+                    track_parts = []
+                    for k, track in enumerate(tracks):
+                        start = track.get('start', 0)
+                        cut_from = track.get('cutFrom', 0)
+                        cut_to = track.get('cutTo')
+                        mix_vol = track.get('mixVolume', 1)
+                        
+                        part_pad = f"file_{file_idx}_part_{k}"
+                        
+                        cmd = f"[{idx}:a]atrim=start={cut_from}"
+                        if cut_to:
+                            cmd += f":end={cut_to}"
+                        cmd += f",asetpts=PTS-STARTPTS,volume={mix_vol},adelay={int(start * 1000)}|{int(start * 1000)}[{part_pad}]"
+                        filter_chains.append(cmd)
+                        track_parts.append(f"[{part_pad}]")
+                    
+                    # Mix tất cả parts từ cùng file thành 1 track
+                    merged_pad = f"file_{file_idx}_merged"
+                    merge_cmd = "".join(track_parts) + f"amix=inputs={len(track_parts)}:duration=first:dropout_transition=0[{merged_pad}]"
+                    filter_chains.append(merge_cmd)
+                    mix_inputs.append(f"[{merged_pad}]")
+                else:
+                    # Chỉ 1 track từ file này
+                    track = tracks[0]
+                    start = track.get('start', 0)
+                    cut_from = track.get('cutFrom', 0)
+                    cut_to = track.get('cutTo')
+                    mix_vol = track.get('mixVolume', 1)
+                    
+                    track_pad = f"file_{file_idx}_single"
+                    
+                    cmd = f"[{idx}:a]atrim=start={cut_from}"
+                    if cut_to:
+                        cmd += f":end={cut_to}"
+                    cmd += f",asetpts=PTS-STARTPTS,volume={mix_vol},adelay={int(start * 1000)}|{int(start * 1000)}[{track_pad}]"
+                    filter_chains.append(cmd)
+                    mix_inputs.append(f"[{track_pad}]")
+                
+                file_idx += 1
+            
+            # Mix tất cả inputs lại (bây giờ chỉ còn vài inputs thay vì 58)
             mix_cmd = "".join(mix_inputs) + f"amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0[final_audio]"
             filter_chains.append(mix_cmd)
             
