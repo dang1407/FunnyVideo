@@ -11,7 +11,7 @@ import subprocess
 import os
 import sys
 
-from consts import TEMP_DIR
+from python.consts import TEMP_DIR
 
 # ==========================================
 # CẤU HÌNH
@@ -553,9 +553,9 @@ def generate_ffmpeg_command_optimized(config_path):
             for path, tracks in tracks_by_file.items():
                 idx = get_input_index(path, input_map, inputs_list)
                 
-                # Nếu có nhiều tracks từ cùng 1 file, gộp lại trước
+                # Nếu có nhiều tracks từ cùng 1 file, mix theo cascade (từng cặp)
                 if len(tracks) > 1:
-                    # Tạo các phần audio riêng và gộp chúng
+                    # Tạo các phần audio riêng
                     track_parts = []
                     for k, track in enumerate(tracks):
                         start = track.get('start', 0)
@@ -570,13 +570,20 @@ def generate_ffmpeg_command_optimized(config_path):
                             cmd += f":end={cut_to}"
                         cmd += f",asetpts=PTS-STARTPTS,volume={mix_vol},adelay={int(start * 1000)}|{int(start * 1000)}[{part_pad}]"
                         filter_chains.append(cmd)
-                        track_parts.append(f"[{part_pad}]")
+                        track_parts.append(part_pad)
                     
-                    # Mix tất cả parts từ cùng file thành 1 track
-                    merged_pad = f"file_{file_idx}_merged"
-                    merge_cmd = "".join(track_parts) + f"amix=inputs={len(track_parts)}:duration=first:dropout_transition=0[{merged_pad}]"
-                    filter_chains.append(merge_cmd)
-                    mix_inputs.append(f"[{merged_pad}]")
+                    # Mix theo cascade: mỗi lần mix 2 tracks để tránh giới hạn
+                    current_pad = track_parts[0]
+                    for i in range(1, len(track_parts)):
+                        next_pad = f"file_{file_idx}_mix_{i}"
+                        if i == len(track_parts) - 1:
+                            # Lần mix cuối cùng
+                            next_pad = f"file_{file_idx}_merged"
+                        mix_cmd = f"[{current_pad}][{track_parts[i]}]amix=inputs=2:duration=first:dropout_transition=0[{next_pad}]"
+                        filter_chains.append(mix_cmd)
+                        current_pad = next_pad
+                    
+                    mix_inputs.append(f"[{current_pad}]")
                 else:
                     # Chỉ 1 track từ file này
                     track = tracks[0]
@@ -596,7 +603,7 @@ def generate_ffmpeg_command_optimized(config_path):
                 
                 file_idx += 1
             
-            # Mix tất cả inputs lại (bây giờ chỉ còn vài inputs thay vì 58)
+            # Mix main audio với transition audio (chỉ 2 inputs)
             mix_cmd = "".join(mix_inputs) + f"amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0[final_audio]"
             filter_chains.append(mix_cmd)
             
