@@ -199,22 +199,26 @@ class ChannelSelectorApp(Tk):
         # Open Editor Buttons - Using Grid for better control
         editor_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         editor_frame.pack(fill="x", padx=10, pady=20)
+        # Two columns so we can place buttons side-by-side
         editor_frame.grid_columnconfigure(0, weight=1)
+        editor_frame.grid_columnconfigure(1, weight=1)
         
+        # Main action spanning full width
         self.open_editor_button = ctk.CTkButton(
-            editor_frame, text="Chọn Clips & Dựng Video →", command=self._open_editor_window, height=40, font=("Arial", 14, "bold")
+            editor_frame, text="Chọn Clips & Dựng Video →", command=self._open_editor_window, height=30, font=("Arial", 14, "bold")
         )
-        self.open_editor_button.grid(row=0, column=0, sticky="ew", pady=5)
-        
+        self.open_editor_button.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
+
+        # Render old clips and Video Manager on same horizontal row
         self.render_old_clip_button = ctk.CTkButton(
-            editor_frame, text="Render clip cũ →", command=self._open_render_history_window, height=40, font=("Arial", 14, "bold")
+            editor_frame, text="Render clip cũ →", command=self._open_render_history_window, height=30, font=("Arial", 14, "bold")
         )
-        self.render_old_clip_button.grid(row=1, column=0, sticky="ew", pady=5)
-        
+        self.render_old_clip_button.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=5)
+
         self.video_manager_button = ctk.CTkButton(
-            editor_frame, text="📹 Quản lý Video", command=self._open_video_manager, height=40, font=("Arial", 14, "bold"), fg_color="purple"
+            editor_frame, text="📹 Quản lý Video", command=self._open_video_manager, height=30, font=("Arial", 14, "bold"),
         )
-        self.video_manager_button.grid(row=2, column=0, sticky="ew", pady=5)
+        self.video_manager_button.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=5)
 
     # Callbacks needed for CTkComboBox (command arg passes value, but bound variable also updates. 
     # original code used bind <<ComboboxSelected>>)

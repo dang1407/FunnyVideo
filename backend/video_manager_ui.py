@@ -354,12 +354,12 @@ class VideoManagerWindow(ctk.CTkToplevel):
             return
 
         # Hiển thị số lượng
-        count_label = ctk.CTkLabel(
-            self.video_list_frame,
-            text=f"Hiển thị {len(filtered_videos)} video",
-            font=("Arial", 12, "bold")
-        )
-        count_label.pack(pady=5)
+        # count_label = ctk.CTkLabel(
+        #     self.video_list_frame,
+        #     text=f"Hiển thị {len(filtered_videos)} video",
+        #     font=("Arial", 12, "bold")
+        # )
+        # count_label.pack(pady=5)
 
         # Render theo batch để tránh lag - giảm batch size cho performance tốt hơn
         batch_size = 30

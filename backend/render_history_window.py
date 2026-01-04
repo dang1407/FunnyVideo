@@ -138,7 +138,7 @@ class ClipViewerApp(ctk.CTkToplevel):
                 self.month_availables = self._read_history_month_in_year(self.history_folder_path, self.year)
                 self.month_combo.configure(values=self.month_availables)
                 if self.month_availables:
-                    self.month_combo.set(self.month_availables[0])
+                    self.month_combo.set(self.month_availables[-1])
                     self.on_month_select(None)
                 else:
                     self.month_combo.set("")
@@ -228,6 +228,8 @@ class ClipViewerApp(ctk.CTkToplevel):
         if month is None: month = datetime.datetime.now().month
         folder_path = os.path.join(history_folder_path, str(year), str(month))
         file_names_raw = read_all_file_name(folder_path)
+        if file_names_raw:
+            file_names_raw = sorted(file_names_raw, key=lambda x: datetime.datetime.strptime(x.replace(".json", ""), "%Y_%m_%d"))
         if file_names_raw is None:
             return []
         return [f.replace(".json", "") for f in file_names_raw]

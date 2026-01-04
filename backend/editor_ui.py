@@ -255,7 +255,7 @@ class EditorWindow(ctk.CTkToplevel):
         os.makedirs(temp_dir_for_channel, exist_ok=True)
         
         xml_filename = f"{self.channel_name}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xml"
-        xml_path = os.path.join(temp_dir_for_channel, xml_filename)
+        xml_path = os.path.join(OUT_DIR / self.channel_name, xml_filename)
         
         try:
             # Gọi hàm export
