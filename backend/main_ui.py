@@ -247,7 +247,7 @@ class ChannelSelectorApp(Tk):
         selected = select_clips(selected_topic, target_time, used_videos)
         for clip in selected:
             duration = clip["duration"]
-            thumb_duration, thumb_path = get_video_info(clip["path"])
+            thumb_duration, thumb_path, width, height = get_video_info(clip["path"])
             if thumb_duration > 0 and thumb_path:
                 editor.imported_clips.append({
                     "path": clip["path"],
@@ -272,8 +272,13 @@ class ChannelSelectorApp(Tk):
             messagebox.showwarning("Chưa chọn kênh", "Vui lòng chọn một kênh trước.")
             return
         
+        selected_topic = self.selected_topic.get()
+        if not selected_topic:
+            messagebox.showwarning("Chưa chọn topic", "Vui lòng chọn một topic trước.")
+            return
+        
         self.withdraw()
-        open_video_manager(self, selected_channel_name)
+        open_video_manager(self, selected_channel_name, selected_topic)
 
     def _create_new_channel(self):
         dialog = ChannelCreationDialog(self, "Tạo kênh mới", self.initial_config_template)

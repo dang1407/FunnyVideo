@@ -1,8 +1,8 @@
 """
 Video Manager UI - Quản lý video đã sử dụng
-Hiển thị tất cả video trong kênh theo danh sách từ Main_clips
-- Load tất cả video từ Main_clips khi mở kênh
-- Hiển thị checkbox "Đã dùng" nếu video có trong used_videos.json
+Hiển thị tất cả video trong topic cụ thể từ Main_clips
+- Load tất cả video từ topic được truyền vào khi mở kênh
+- Hiển thị tên, thumbnail và checkbox "Đã dùng" nếu video có trong used_videos.json
 - Tích checkbox: thêm video vào used_videos.json
 - Bỏ tích: xóa video khỏi used_videos.json
 """
@@ -16,15 +16,16 @@ import os
 import subprocess
 import platform
 from pathlib import Path
-from backend.consts import *
-from backend.editor_ui import load_json
-from backend.helper import get_video_info, load_channel_path, read_json_file_content
+from consts import *
+from editor_ui import load_json
+from helper import get_video_info, load_channel_path, read_json_file_content
 
 class VideoManagerWindow(ctk.CTkToplevel):
     def __init__(self, parent, channel_name, topic):
         super().__init__(parent)
         self.channel_name = channel_name
-        self.title(f"Quản lý Video - Kênh: {self.channel_name}")
+        self.topic = topic
+        self.title(f"Quản lý Video - Kênh: {self.channel_name} - Topic: {self.topic}")
         
         # Kích thước và vị trí
         width = 1400
@@ -41,12 +42,16 @@ class VideoManagerWindow(ctk.CTkToplevel):
         self.channel_path = load_channel_path(channel_name)
         self.used_videos_file = os.path.join(self.channel_path, "used_videos.json")
         self.config_file = os.path.join(self.channel_path, "config.json")
-        self.topic = topic
         # Load config để lấy thư mục video
         self.video_sources = self._load_video_sources()
         self.used_videos = self._load_used_videos()
         self.all_videos = []  # List of {path, duration, thumb, is_used}
         self._image_references = []
+        
+        # Performance optimization variables
+        self.search_timer = None  # Timer for debouncing search
+        self.search_delay = 300  # Delay in milliseconds
+        self.current_items = []  # Current rendered items for show/hide optimization
         
         # Lazy loading variables
         self.visible_items = {}  # {index: widget_dict}
@@ -73,8 +78,19 @@ class VideoManagerWindow(ctk.CTkToplevel):
         return all_clips
 
     def _load_used_videos(self):
-        used_videos = load_json(self.used_videos_file)
-        return used_videos
+        """Load danh sách video đã sử dụng từ used_videos.json và convert sang absolute paths"""
+        used_videos_list = load_json(self.used_videos_file)
+        used_videos_set = set()
+        
+        for rel_path in used_videos_list:
+            # Convert relative path to absolute path
+            abs_path = os.path.join(self.channel_path, rel_path)
+            abs_path = os.path.normpath(abs_path)
+            # Normalize to lowercase for case-insensitive comparison on Windows
+            abs_path_compare = abs_path.lower() if platform.system() == 'Windows' else abs_path
+            used_videos_set.add(abs_path_compare)
+            
+        return used_videos_set
 
     def _save_used_videos(self):
         """Lưu danh sách video đã sử dụng vào used_videos.json"""
@@ -200,10 +216,44 @@ class VideoManagerWindow(ctk.CTkToplevel):
         ).pack(side="left", padx=5)
 
         # Search
-        ctk.CTkLabel(filter_frame, text="Tìm kiếm:", font=("Arial", 12)).pack(side="left", padx=(20, 5))
-        self.search_entry = ctk.CTkEntry(filter_frame, width=200, placeholder_text="Nhập tên file...")
-        self.search_entry.pack(side="left", padx=5)
-        self.search_entry.bind("<KeyRelease>", lambda e: self._apply_filter())
+        search_frame = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        search_frame.pack(side="left", padx=(20, 5))
+        
+        ctk.CTkLabel(search_frame, text="Tìm kiếm:", font=("Arial", 12)).pack(side="left")
+        self.search_entry = ctk.CTkEntry(search_frame, width=250, placeholder_text="Nhập tên file (có thể dùng % và _)")
+        self.search_entry.pack(side="left", padx=(5, 0))
+        self.search_entry.bind("<KeyRelease>", self._on_search_keyrelease)
+        
+        # Help tooltip
+        help_label = ctk.CTkLabel(
+            search_frame,
+            text="❓",
+            font=("Arial", 10),
+            fg_color="gray60",
+            corner_radius=8,
+            width=20,
+            height=20
+        )
+        help_label.pack(side="left", padx=(3, 0))
+        
+        # Bind hover events for help
+        def show_help(event):
+            help_text = (
+                "Tìm kiếm thông minh:\n\n"
+                "• Tìm kiếm thường: Animal\n"
+                "  → tìm tất cả file có chứa 'Animal'\n\n"
+                "• Tìm kiếm SQL LIKE:\n"
+                "  % = bất kỳ ký tự nào\n"
+                "  _ = đúng 1 ký tự\n\n"
+                "Ví dụ:\n"
+                "• Animal% = bắt đầu với 'Animal'\n"
+                "• %test% = có chứa 'test'\n"
+                "• a_imals = 'animals', 'agimals', etc."
+            )
+            # Show tooltip (simple messagebox for now)
+            messagebox.showinfo("Hướng dẫn tìm kiếm", help_text)
+            
+        help_label.bind("<Button-1>", show_help)
 
         # Video List (Scrollable)
         self.video_list_frame = ctk.CTkScrollableFrame(
@@ -235,7 +285,7 @@ class VideoManagerWindow(ctk.CTkToplevel):
                 self.update()
 
             # Get video info (duration and thumbnail)
-            duration, thumb_path = get_video_info(video_path)
+            duration, thumb_path, width, height = get_video_info(video_path)
 
             if duration > 0 and thumb_path:
                 normalized_path = os.path.normpath(video_path)
@@ -273,8 +323,12 @@ class VideoManagerWindow(ctk.CTkToplevel):
         self._render_video_list()
 
     def _render_video_list(self):
-        """Hiển thị danh sách video với lazy loading"""
-        # Clear existing
+        """Hiển thị danh sách video với lazy loading tối ưu"""
+        # Show loading indicator
+        self.stats_label.configure(text="🔄 Đang lọc video...")
+        self.update_idletasks()
+        
+        # Clear existing efficiently
         for widget in self.video_list_frame.winfo_children():
             widget.destroy()
 
@@ -291,6 +345,12 @@ class VideoManagerWindow(ctk.CTkToplevel):
                 font=("Arial", 14)
             )
             no_result.pack(pady=50)
+            # Restore stats
+            total = len(self.all_videos)
+            used = sum(1 for v in self.all_videos if v['is_used'])
+            self.stats_label.configure(
+                text=f"📊 Tổng: {total} video | ✅ Đã dùng: {used} | ⭕ Chưa dùng: {total - used}"
+            )
             return
 
         # Hiển thị số lượng
@@ -301,12 +361,21 @@ class VideoManagerWindow(ctk.CTkToplevel):
         )
         count_label.pack(pady=5)
 
-        # Render theo batch để tránh lag
-        # Chỉ render 50 video đầu, còn lại render khi scroll
-        batch_size = 50
+        # Render theo batch để tránh lag - giảm batch size cho performance tốt hơn
+        batch_size = 30
+
+        # Store current filtered videos for load more
+        self.current_filtered_videos = filtered_videos
 
         for idx, video in enumerate(filtered_videos[:batch_size]):
             self._create_video_item(video, idx)
+
+        # Update stats after initial render
+        total = len(self.all_videos)
+        used = sum(1 for v in self.all_videos if v['is_used'])
+        self.stats_label.configure(
+            text=f"📊 Tổng: {total} video | ✅ Đã dùng: {used} | ⭕ Chưa dùng: {total - used} | 🔍 Tìm thấy: {len(filtered_videos)}"
+        )
 
         # Nếu còn nhiều video, hiển thị nút "Load more"
         if len(filtered_videos) > batch_size:
@@ -316,12 +385,24 @@ class VideoManagerWindow(ctk.CTkToplevel):
                 # Xóa nút load more
                 load_more_btn.destroy()
 
+                # Show loading
+                loading_label = ctk.CTkLabel(
+                    self.video_list_frame,
+                    text="⏳ Đang tải thêm video...",
+                    font=("Arial", 10)
+                )
+                loading_label.pack(pady=5)
+                self.update_idletasks()
+
                 # Render batch tiếp theo
                 start_idx = batch_size
                 end_idx = min(start_idx + batch_size, len(filtered_videos))
 
                 for idx in range(start_idx, end_idx):
                     self._create_video_item(filtered_videos[idx], idx)
+
+                # Remove loading label
+                loading_label.destroy()
 
                 # Nếu còn nữa, tạo nút load more mới
                 if end_idx < len(filtered_videos):
@@ -377,10 +458,31 @@ class VideoManagerWindow(ctk.CTkToplevel):
         elif filter_mode == "unused":
             filtered = [v for v in filtered if not v['is_used']]
 
-        # Apply search
-        search_text = self.search_entry.get().strip().lower()
+        # Apply search (hỗ trợ SQL LIKE với % và _)
+        search_text = self.search_entry.get().strip()
         if search_text:
-            filtered = [v for v in filtered if search_text in v['name'].lower()]
+            search_lower = search_text.lower()
+            
+            # Kiểm tra xem có sử dụng SQL LIKE wildcards không
+            if '%' in search_text or '_' in search_text:
+                # Sử dụng SQL LIKE pattern matching
+                import re
+                pattern = search_lower
+                pattern = re.escape(pattern)  # Escape special regex chars
+                pattern = pattern.replace(r'\%', '.*')  # % -> .*
+                pattern = pattern.replace(r'\_', '.')   # _ -> .
+                pattern = f"^{pattern}$"  # Match whole name với wildcards
+                
+                try:
+                    regex = re.compile(pattern)
+                    filtered = [v for v in filtered if regex.search(v['name'].lower())]
+                except re.error:
+                    # If regex is invalid, fall back to simple contains search
+                    search_simple = search_lower.replace('%', '').replace('_', '')
+                    filtered = [v for v in filtered if search_simple in v['name'].lower()]
+            else:
+                # Simple contains search (không có wildcards)
+                filtered = [v for v in filtered if search_lower in v['name'].lower()]
 
         return filtered
 
@@ -409,22 +511,28 @@ class VideoManagerWindow(ctk.CTkToplevel):
         )
         placeholder.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Load thumbnail sau (không block UI)
+        # Load thumbnail sau (không block UI) - tăng delay để tránh lag
         def load_thumb():
             try:
+                # Check if widget still exists (user might have filtered while loading)
+                if not placeholder.winfo_exists():
+                    return
+                    
                 img = Image.open(video['thumb_path'])
                 img.thumbnail((120, 80))
                 photo = ctk.CTkImage(light_image=img, dark_image=img, size=(120, 80))
                 self._image_references.append(photo)
 
-                placeholder.destroy()
-                thumb_label = ctk.CTkLabel(thumb_container, image=photo, text="")
-                thumb_label.place(relx=0.5, rely=0.5, anchor="center")
+                if placeholder.winfo_exists():
+                    placeholder.destroy()
+                    thumb_label = ctk.CTkLabel(thumb_container, image=photo, text="")
+                    thumb_label.place(relx=0.5, rely=0.5, anchor="center")
             except:
-                placeholder.configure(text="❌", fg_color="gray40")
+                if placeholder.winfo_exists():
+                    placeholder.configure(text="❌", fg_color="gray40")
 
-        # Schedule load thumb sau 10ms để UI render trước
-        self.after(10, load_thumb)
+        # Schedule load thumb sau 50ms để UI render mượt hơn
+        self.after(50 + index * 5, load_thumb)  # Stagger loading
 
         # Info Frame
         info_frame = ctk.CTkFrame(item_frame, fg_color="transparent")
@@ -537,6 +645,20 @@ class VideoManagerWindow(ctk.CTkToplevel):
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể mở video:\n{e}")
 
+    def _on_search_keyrelease(self, event):
+        """Handle search input with debouncing"""
+        # Cancel previous timer if exists
+        if self.search_timer:
+            self.after_cancel(self.search_timer)
+        
+        # Set new timer
+        self.search_timer = self.after(self.search_delay, self._debounced_search)
+    
+    def _debounced_search(self):
+        """Execute search after debounce delay"""
+        self.search_timer = None
+        self._apply_filter()
+
     def _apply_filter(self):
         """Áp dụng filter và render lại"""
         self._render_video_list()
@@ -557,7 +679,9 @@ class VideoManagerWindow(ctk.CTkToplevel):
         if confirm:
             filtered = self._get_filtered_videos()
             for video in filtered:
-                self.used_videos.add(video['path'])
+                normalized_path = os.path.normpath(video['path'])
+                normalized_path_compare = normalized_path.lower() if platform.system() == 'Windows' else normalized_path
+                self.used_videos.add(normalized_path_compare)
                 video['is_used'] = True
 
             self._save_used_videos()
@@ -582,7 +706,9 @@ class VideoManagerWindow(ctk.CTkToplevel):
         if confirm:
             filtered = self._get_filtered_videos()
             for video in filtered:
-                self.used_videos.discard(video['path'])
+                normalized_path = os.path.normpath(video['path'])
+                normalized_path_compare = normalized_path.lower() if platform.system() == 'Windows' else normalized_path
+                self.used_videos.discard(normalized_path_compare)
                 video['is_used'] = False
 
             self._save_used_videos()
@@ -599,6 +725,10 @@ class VideoManagerWindow(ctk.CTkToplevel):
 
     def _on_closing(self):
         """Đóng cửa sổ"""
+        # Cancel search timer if exists
+        if self.search_timer:
+            self.after_cancel(self.search_timer)
+            
         # Clean up thumbnails
         if TEMP_DIR.exists():
             for f in TEMP_DIR.glob("thumb_*.png"):
@@ -611,7 +741,7 @@ class VideoManagerWindow(ctk.CTkToplevel):
         self.destroy()
 
 
-def open_video_manager(parent, channel_name):
+def open_video_manager(parent, channel_name, topic):
     """Mở cửa sổ quản lý video"""
-    window = VideoManagerWindow(parent, channel_name)
+    window = VideoManagerWindow(parent, channel_name, topic)
     window.focus()

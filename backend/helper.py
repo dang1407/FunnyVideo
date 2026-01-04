@@ -41,36 +41,44 @@ def read_json_file_content(file_path):
     except Exception:
         return []
 def get_video_info(file_path):
-    """Lấy thời lượng và tạo thumbnail cho video."""
+    """
+    Lấy:
+    - duration (giây)
+    - thumbnail (đường dẫn)
+    - width, height của video
+    """
     try:
         video = cv2.VideoCapture(file_path)
-        if not video.isOpened(): return 0, None
+        if not video.isOpened():
+            return 0, None, 0, 0
+
+        # Lấy kích thước video
+        width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         # Lấy thời lượng
         frame_count = video.get(cv2.CAP_PROP_FRAME_COUNT)
         fps = video.get(cv2.CAP_PROP_FPS)
         duration = frame_count / fps if fps > 0 else 0
 
-        # Tạo thumbnail từ khung hình đầu tiên
+        # Tạo thumbnail từ frame đầu tiên
         ret, frame = video.read()
         thumb_path = None
         if ret:
-            # Tạo thư mục Temp nếu chưa có
             TEMP_DIR.mkdir(exist_ok=True)
 
-            # Chuyển đổi màu từ BGR (OpenCV) sang RGB (Pillow)
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
             img.thumbnail(THUMBNAIL_SIZE)
 
-            # Lưu thumbnail
             base_filename = os.path.basename(file_path)
             thumb_filename = f"thumb_{base_filename}.png"
             thumb_path = TEMP_DIR / thumb_filename
             img.save(thumb_path)
 
         video.release()
-        return duration, str(thumb_path)
+        return duration, str(thumb_path), width, height
+
     except Exception as e:
         print(f"Lỗi khi xử lý video {file_path}: {e}")
-        return 0, None
+        return 0, None, 0, 0

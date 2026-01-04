@@ -201,7 +201,7 @@ class ClipViewerApp(ctk.CTkToplevel):
             editor = EditorWindow(self.master if self.master else self, self.channel_name)
             
             for clip in clips_list:
-                thumb_duration, thumb_path = get_video_info(clip.get("path"))
+                thumb_duration, thumb_path, width, height = get_video_info(clip.get("path"))
                 clip_obj = {
                     "path": clip.get("path"),
                     "duration": clip.get("duration"),

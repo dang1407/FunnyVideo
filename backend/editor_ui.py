@@ -1,8 +1,6 @@
-import tkinter as tk
 import customtkinter as ctk
 import platform
-from tkinter import ttk, filedialog
-from PIL import Image, ImageTk
+from tkinter import filedialog
 from tkinterdnd2 import DND_FILES
 import json
 import subprocess
@@ -11,15 +9,9 @@ from clip_selector import save_used_videos, save_render_history
 from DragSortHelper import DDList, ClipItem
 from consts import *
 from helper import load_channel_path, get_video_info
-from render_helper import build_and_render_from_config, generate_ffmpeg_command
-
-try:
-    from Tkinter import Tk, IntVar, Label, Entry, Button
-    import tkMessageBox as messagebox
-    from Tkconstants import *
-except ImportError:
-    from tkinter import Tk, IntVar, Label, Entry, Button, messagebox
-    from tkinter.constants import *
+from render_helper import  generate_ffmpeg_command
+from tkinter import  messagebox
+from tkinter.constants import *
 
 # --- Hằng số và đường dẫn ---
 
@@ -90,6 +82,8 @@ class EditorWindow(ctk.CTkToplevel):
                                                                                                           padx=10,
                                                                                                           pady=10)
         ctk.CTkButton(control_panel, text="Render Video", command=self._render_video, fg_color="green").pack(
+            side="left", padx=10, pady=10)
+        ctk.CTkButton(control_panel, text="Export Premiere XML", command=self._export_premiere_xml, fg_color="#9B59B6").pack(
             side="left", padx=10, pady=10)
 
         self.duration_label = ctk.CTkLabel(control_panel, text="Duration: 0 (s)", font=("Arial", 14, "bold"))
@@ -181,7 +175,7 @@ class EditorWindow(ctk.CTkToplevel):
             if any(c['path'] == normalized_path for c in self.imported_clips): continue
 
             if os.path.isfile(normalized_path):
-                duration, thumb_path = get_video_info(normalized_path)
+                duration, thumb_path, width, height = get_video_info(normalized_path)
                 if duration > 0 and thumb_path:
                     # In CTk, BooleanVar is ctk.BooleanVar or tk.BooleanVar?
                     # CTkCheckBox uses tk.BooleanVar or ctk.BooleanVar.
@@ -236,6 +230,58 @@ class EditorWindow(ctk.CTkToplevel):
             return h * 3600 + m * 60 + s + f / fps
         except:
             return 0.0
+
+    def _export_premiere_xml(self):
+        """Export FCP XML để import vào Adobe Premiere Pro"""
+        from premiere_helper import generate_premiere_xml
+        import datetime
+        
+        # Lấy config của channel
+        config = load_channel_config(self.channel_name)
+        
+        # Lấy các clip đã chọn
+        clip_to_export = []
+        for clip in self.imported_clips:
+            if clip["var"].get():
+                clip_to_export.append(clip)
+        
+        if not clip_to_export:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 clip để export!")
+            return
+        config_path = build_editly_config(self.channel_name, config=config, selected_clips=clip_to_export, output_path=OUT_DIR / self.channel_name)
+
+        # Tạo đường dẫn output
+        temp_dir_for_channel = os.path.join(TEMP_DIR, self.channel_name)
+        os.makedirs(temp_dir_for_channel, exist_ok=True)
+        
+        xml_filename = f"{self.channel_name}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xml"
+        xml_path = os.path.join(temp_dir_for_channel, xml_filename)
+        
+        try:
+            # Gọi hàm export
+            generate_premiere_xml(
+                config_path,
+                xml_path
+            )
+            
+            # Thông báo thành công
+            messagebox.showinfo(
+                "Thành công", 
+                f"Đã export XML thành công!\n\n"
+                f"File: {xml_path}\n\n"
+                f"Để import vào Premiere:\n"
+                f"1. Mở Adobe Premiere Pro\n"
+                f"2. File -> Import\n"
+                f"3. Chọn file XML này"
+            )
+            
+            # Mở folder chứa file
+            # open_file_cross_platform(temp_dir_for_channel)
+            
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể export XML:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def _render_video(self):
         config = load_channel_config(self.channel_name)
@@ -384,6 +430,7 @@ def tc_to_seconds(tc: str, fps: int) -> float:
 
 
 def build_editly_config(channel_name: str, config: dict, selected_clips: list, output_path: str) -> dict:
+    print(config, selected_clips, output_path)
     import os, json, datetime
     from typing import Optional
 
@@ -498,9 +545,9 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
                 "type": "video",
                 "path": trans_path,
                 "start": trans_pre_start_in_A,
-                "stop": clipA_dur,
+                "stop": trans_pre_start_in_A + trans_duration_s,
                 "cutFrom": 0.0,
-                "cutTo": min(pre_s, trans_duration_s),
+                "cutTo": trans_duration_s,
                 "resizeMode": "contain",
                 "mixVolume": 1
             })
@@ -515,40 +562,40 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
             })
 
         # --- 2) Gap đen (nếu có) ---
-        if gap_s > 0:
-            gap_clip = black_gap_clip(gap_s)
-            if trans_frames > 0:
-                # transition phần giữa (sau pre_s)
-                gap_clip["layers"].append({
-                    "type": "video",
-                    "path": trans_path,
-                    "start": 0.0,  # chạy từ đầu đoạn gap trên transition file (cutted bằng cutFrom)
-                    "stop": gap_s,
-                    "cutFrom": min(pre_s, trans_duration_s),
-                    "cutTo": min(pre_s + gap_s, trans_duration_s),
-                    "resizeMode": "contain",
-                    "mixVolume": 1
-                })
-            clips_json.append(gap_clip)
-            all_duration += gap_s
+        # if gap_s > 0:
+        #     gap_clip = black_gap_clip(gap_s)
+        #     if trans_frames > 0:
+        #         # transition phần giữa (sau pre_s)
+        #         gap_clip["layers"].append({
+        #             "type": "video",
+        #             "path": trans_path,
+        #             "start": 0.0,  # chạy từ đầu đoạn gap trên transition file (cutted bằng cutFrom)
+        #             "stop": gap_s,
+        #             "cutFrom": min(pre_s, trans_duration_s),
+        #             "cutTo": min(pre_s + gap_s, trans_duration_s),
+        #             "resizeMode": "contain",
+        #             "mixVolume": 1
+        #         })
+        #     clips_json.append(gap_clip)
+        #     all_duration += gap_s
 
         # --- 3) Clip B với phần "post" transition đè lên đầu clip B ---
         clipB_obj = main_clip_layer(clipB_path, 0.0, clipB_dur)
-        if trans_frames > 0:
-            post_s = max(0.0, trans_duration_s - pre_s - gap_s)
-            # phần đầu của clip B bị đè bởi phần còn lại của transition
-            clipB_obj["layers"].append({
-                "type": "video",
-                "path": trans_path,
-                "start": 0.0,
-                "stop": min(post_s, clipB_dur),
-                "cutFrom": min(pre_s + gap_s, trans_duration_s),
-                "cutTo": trans_duration_s,
-                "resizeMode": "contain",
-                "mixVolume": 1
-            })
-            # lưu ý: audio track đã thêm ở phần A (vì mình chèn 1 audioTracks cho toàn bộ transition),
-            # không cần thêm thêm audioTracks ở đây để tránh trùng.
+        # if trans_frames > 0:
+        #     post_s = max(0.0, trans_duration_s - pre_s - gap_s)
+        #     # phần đầu của clip B bị đè bởi phần còn lại của transition
+        #     clipB_obj["layers"].append({
+        #         "type": "video",
+        #         "path": trans_path,
+        #         "start": 0.0,
+        #         "stop": min(post_s, clipB_dur),
+        #         "cutFrom": min(pre_s + gap_s, trans_duration_s),
+        #         "cutTo": trans_duration_s,
+        #         "resizeMode": "contain",
+        #         "mixVolume": 1
+        #     })
+        #     # lưu ý: audio track đã thêm ở phần A (vì mình chèn 1 audioTracks cho toàn bộ transition),
+        #     # không cần thêm thêm audioTracks ở đây để tránh trùng.
 
         clips_json.append(clipB_obj)
         all_duration += clipB_dur
@@ -698,8 +745,9 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
     print(f"✅ Đã lưu cấu hình editly: {config_path}")
 
     # Gọi render
-    start_render(config_path, selected_clips, channel_name, config)
-    return spec
+    # start_render(config_path, selected_clips, channel_name, config)
+    # return spec
+    return config_path
 
 def render_video(config_path, selected_clips, channel_name, channel_config):
     try:
@@ -708,8 +756,8 @@ def render_video(config_path, selected_clips, channel_name, channel_config):
         save_used_videos(selected_clips, get_used_videos_path(channel_name))
     except subprocess.CalledProcessError as e:
         print(f"❌ Lỗi khi render video bằng editly: {e}")
-    except FileNotFoundError:
-        print("⚠️ Lệnh 'editly' chưa được cài đặt hoặc không có trong PATH!")
+    except FileNotFoundError as e:
+        print("⚠️ Lệnh 'editly' chưa được cài đặt hoặc không có trong PATH!", e)
 
 def start_render(config_path, selected_clips, channel_name, channel_config):
     # Tạo luồng riêng để không làm treo UI

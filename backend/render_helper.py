@@ -238,11 +238,20 @@ def generate_ffmpeg_command(config_path):
     # ==========================================
     # EXECUTE
     # ==========================================
+    # Ghi filter_complex vào file để tránh command quá dài trên Windows
+    temp_dir = os.path.dirname(out_path) or "."
+    filter_file = os.path.join(temp_dir, f"ffmpeg_filter_{uuid.uuid4().hex[:8]}.txt")
+    
+    filter_content = ";".join(filter_chains)
+    with open(filter_file, "w", encoding="utf-8") as f:
+        f.write(filter_content)
+    
     cmd_args = [FFMPEG_EXEC, "-y"]
     for inp in inputs_list:
         cmd_args.extend(["-i", inp])
 
-    cmd_args.extend(["-filter_complex", ";".join(filter_chains)])
+    # Sử dụng -filter_complex_script thay vì -filter_complex để tránh lỗi command quá dài
+    cmd_args.extend(["-filter_complex_script", filter_file])
     cmd_args.extend(["-map", "[main_video]", "-map", "[final_audio]"])
     cmd_args.extend([
         "-c:v", "h264_nvenc",
@@ -259,6 +268,9 @@ def generate_ffmpeg_command(config_path):
 
     try:
         subprocess.run(cmd_args, check=True)
+        # Xóa file filter tạm
+        if os.path.exists(filter_file):
+            os.remove(filter_file)
         # Tìm root window để messagebox hiển thị phía trên
         root = tk._default_root
         if root:
@@ -274,6 +286,9 @@ def generate_ffmpeg_command(config_path):
         else:
             messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
     except subprocess.CalledProcessError as e:
+        # Xóa file filter tạm
+        if os.path.exists(filter_file):
+            os.remove(filter_file)
         # Tìm root window để messagebox hiển thị phía trên
         root = tk._default_root
         if root:
@@ -297,6 +312,158 @@ def generate_ffmpeg_command(config_path):
 def run(cmd):
     print("⚙️ Run:", " ".join(shlex.quote(c) for c in cmd))
     subprocess.run(cmd, check=True)
+
+
+# Số clip tối đa trong một batch để tránh command quá dài
+MAX_CLIPS_PER_BATCH = 10
+
+
+def concat_videos_simple(video_files, output_path, temp_dir=None):
+    """
+    Concat các video files bằng phương pháp concat demuxer (nhanh, không re-encode)
+    """
+    if not video_files:
+        return None
+    
+    if len(video_files) == 1:
+        # Chỉ có 1 file, copy trực tiếp
+        import shutil
+        shutil.copy(video_files[0], output_path)
+        return output_path
+    
+    # Tạo file list cho concat demuxer
+    if temp_dir is None:
+        temp_dir = os.path.dirname(output_path) or "."
+    
+    list_file = os.path.join(temp_dir, f"concat_list_{uuid.uuid4().hex[:8]}.txt")
+    
+    with open(list_file, "w", encoding="utf-8") as f:
+        for vf in video_files:
+            # Escape đường dẫn cho ffmpeg concat
+            escaped_path = vf.replace("\\", "/").replace("'", "'\\''")
+            f.write(f"file '{escaped_path}'\n")
+    
+    # Re-encode để tránh lỗi "Late SEI is not implemented" khi concat
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", list_file,
+        "-c:v", "h264_nvenc", "-preset", "p6",
+        "-c:a", "aac", "-b:a", "320k",
+        output_path
+    ]
+    
+    try:
+        run(cmd)
+    finally:
+        if os.path.exists(list_file):
+            os.remove(list_file)
+    
+    return output_path
+
+
+def render_batch_clips(batch_clips, batch_idx, width, height, fps, blur_amount, 
+                       keep_audio, logo_path, transition_file, temp_dir):
+    """
+    Render một batch các clips thành một file video tạm
+    """
+    clip_files = []
+    
+    for idx, clip_cfg in enumerate(batch_clips):
+        video_layer = next((x for x in clip_cfg["layers"] if x["type"] == "video"), None)
+        if not video_layer:
+            continue
+
+        video_path = video_layer["path"]
+        tmp_out = os.path.join(temp_dir, f"tmp_clip_b{batch_idx}_{idx}_{uuid.uuid4().hex[:6]}.mp4")
+
+        is_transition_clip = "Transition.mov" in video_path
+
+        inputs = ["-i", video_path]
+        filter_complex = []
+
+        if not is_transition_clip and logo_path and os.path.exists(logo_path):
+            inputs += ["-i", logo_path]
+
+            filter_complex.append("[0:v]split=2[bg][fg]")
+            filter_complex.append(
+                f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},"
+                f"boxblur={blur_amount}:1[bg_blur]"
+            )
+            filter_complex.append(
+                f"[fg]scale=-2:{height}:force_original_aspect_ratio=decrease[fg_scaled]"
+            )
+            filter_complex.append(
+                f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2[composed]"
+            )
+            filter_complex.append(
+                f"[composed][1:v]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[with_logo]"
+            )
+            filter_complex.append(
+                f"[with_logo]fps={fps},setsar=1,format=yuv420p[outv]"
+            )
+        else:
+            filter_complex.append("[0:v]split=2[bg][fg]")
+            filter_complex.append(
+                f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},"
+                f"boxblur={blur_amount}:1[bg_blur]"
+            )
+            filter_complex.append(
+                f"[fg]scale=-2:{height}:force_original_aspect_ratio=decrease[fg_scaled]"
+            )
+            filter_complex.append(
+                f"[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2[composed]"
+            )
+            filter_complex.append(
+                f"[composed]fps={fps},setsar=1,format=yuv420p[outv]"
+            )
+
+        cmd = ["ffmpeg", "-y", "-hwaccel", "cuda"] + inputs
+        cmd += ["-filter_complex", ";".join(filter_complex)]
+        cmd += ["-map", "[outv]"]
+
+        if keep_audio:
+            cmd += ["-map", "0:a?"]
+
+        cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18"]
+        if keep_audio:
+            cmd += ["-c:a", "aac", "-b:a", "320k"]
+
+        cmd += [tmp_out]
+        run(cmd)
+        clip_files.append(tmp_out)
+    
+    # Render transitions cho batch này
+    trans_files = []
+    if transition_file:
+        for idx in range(len(clip_files) - 1):
+            trans_tmp = os.path.join(temp_dir, f"tmp_trans_b{batch_idx}_{idx}_{uuid.uuid4().hex[:6]}.mp4")
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", transition_file,
+                "-vf",
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps},setsar=1,format=yuv420p",
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "18",
+                "-an",
+                trans_tmp
+            ]
+            run(cmd)
+            trans_files.append(trans_tmp)
+    
+    # Tạo sequence cho batch
+    final_sequence = []
+    for i, clip_file in enumerate(clip_files):
+        final_sequence.append(clip_file)
+        if i < len(trans_files):
+            final_sequence.append(trans_files[i])
+    
+    return clip_files, trans_files, final_sequence
 
 
 def build_and_render_from_config(video_config_path, config_dict):
@@ -323,7 +490,203 @@ def build_and_render_from_config(video_config_path, config_dict):
         if overlay_layer:
             logo_path = overlay_layer["path"]
 
-    # === BƯỚC 1: Render clips với logo (trừ transition) ===
+    # Tạo thư mục tạm
+    temp_dir = os.path.join(os.path.dirname(out_path) or ".", f"ffmpeg_render_{uuid.uuid4().hex[:8]}")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    try:
+        # === KIỂM TRA SỐ LƯỢNG CLIPS ĐỂ QUYẾT ĐỊNH RENDER THEO BATCH HAY KHÔNG ===
+        if len(clips) >= MAX_CLIPS_PER_BATCH:
+            print(f"📦 Số lượng clips ({len(clips)}) >= {MAX_CLIPS_PER_BATCH}, render theo batch...")
+            _render_with_batches(clips, out_path, width, height, fps, blur_amount, 
+                                keep_audio, logo_path, transition_file, temp_dir)
+        else:
+            print(f"📦 Số lượng clips ({len(clips)}) < {MAX_CLIPS_PER_BATCH}, render trực tiếp...")
+            _render_direct(clips, out_path, width, height, fps, blur_amount,
+                          keep_audio, logo_path, transition_file, temp_dir)
+    finally:
+        # Cleanup temp directory
+        import shutil
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    print("✅ DONE:", out_path)
+    # Tìm root window để messagebox hiển thị phía trên
+    root = tk._default_root
+    if root:
+        for widget in root.winfo_children():
+            if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
+                widget.attributes('-topmost', True)
+                messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}", parent=widget)
+                widget.attributes('-topmost', False)
+                break
+        else:
+            messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
+    else:
+        messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
+    return out_path
+
+
+def _render_with_batches(clips, out_path, width, height, fps, blur_amount,
+                         keep_audio, logo_path, transition_file, temp_dir):
+    """
+    Render với số lượng clips lớn bằng cách chia thành các batch nhỏ
+    """
+    # Chia clips thành các batch
+    batches = []
+    for i in range(0, len(clips), MAX_CLIPS_PER_BATCH):
+        batches.append(clips[i:i + MAX_CLIPS_PER_BATCH])
+    
+    print(f"📦 Chia thành {len(batches)} batch(es)")
+    
+    all_clip_files = []
+    all_trans_files = []
+    batch_video_files = []
+    batch_audio_files = []
+    
+    for batch_idx, batch_clips in enumerate(batches):
+        print(f"🎬 Đang render batch {batch_idx + 1}/{len(batches)} ({len(batch_clips)} clips)...")
+        
+        clip_files, trans_files, sequence = render_batch_clips(
+            batch_clips, batch_idx, width, height, fps, blur_amount,
+            keep_audio, logo_path, transition_file, temp_dir
+        )
+        
+        all_clip_files.extend(clip_files)
+        all_trans_files.extend(trans_files)
+        
+        # Concat batch thành video tạm sử dụng concat demuxer để tránh command quá dài
+        batch_video = os.path.join(temp_dir, f"batch_{batch_idx}_video.mp4")
+        
+        if len(sequence) > 1:
+            # Sử dụng concat demuxer thay vì filter để tránh command quá dài
+            concat_list_file = os.path.join(temp_dir, f"batch_{batch_idx}_list.txt")
+            with open(concat_list_file, "w", encoding="utf-8") as f:
+                for vf in sequence:
+                    escaped_path = vf.replace("\\", "/").replace("'", "'\\''")
+                    f.write(f"file '{escaped_path}'\n")
+            
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_list_file,
+                "-c:v", "h264_nvenc", "-preset", "p6",
+                "-an",
+                batch_video
+            ]
+            run(cmd)
+        else:
+            # Chỉ có 1 file, copy trực tiếp
+            import shutil
+            shutil.copy(sequence[0], batch_video)
+        
+        batch_video_files.append(batch_video)
+        
+        # Render audio cho batch nếu cần
+        if keep_audio and clip_files:
+            batch_audio = os.path.join(temp_dir, f"batch_{batch_idx}_audio.aac")
+            
+            if len(clip_files) > 1:
+                # Sử dụng concat demuxer cho audio để tránh command quá dài
+                audio_list_file = os.path.join(temp_dir, f"batch_{batch_idx}_audio_list.txt")
+                with open(audio_list_file, "w", encoding="utf-8") as f:
+                    for cf in clip_files:
+                        escaped_path = cf.replace("\\", "/").replace("'", "'\\''")
+                        f.write(f"file '{escaped_path}'\n")
+                
+                audio_cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", audio_list_file,
+                    "-vn",
+                    "-c:a", "aac", "-b:a", "320k",
+                    batch_audio
+                ]
+                run(audio_cmd)
+            else:
+                # Chỉ có 1 file, extract audio
+                audio_cmd = ["ffmpeg", "-y", "-i", clip_files[0], "-vn", "-c:a", "aac", "-b:a", "320k", batch_audio]
+                run(audio_cmd)
+            
+            batch_audio_files.append(batch_audio)
+    
+    # === CONCAT TẤT CẢ CÁC BATCH LẠI ===
+    print("🔗 Đang concat tất cả các batch...")
+    
+    # Thêm transition giữa các batch nếu có
+    final_batch_sequence = []
+    for i, batch_video in enumerate(batch_video_files):
+        final_batch_sequence.append(batch_video)
+        
+        # Thêm transition giữa các batch
+        if transition_file and i < len(batch_video_files) - 1:
+            inter_trans = os.path.join(temp_dir, f"inter_batch_trans_{i}_{uuid.uuid4().hex[:6]}.mp4")
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", transition_file,
+                "-vf",
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps},setsar=1,format=yuv420p",
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "18",
+                "-an",
+                inter_trans
+            ]
+            run(cmd)
+            final_batch_sequence.append(inter_trans)
+    
+    # Concat video cuối cùng sử dụng concat demuxer để tránh command quá dài
+    final_video_only = os.path.join(temp_dir, "final_video_only.mp4")
+    concat_videos_simple(final_batch_sequence, final_video_only, temp_dir)
+    
+    # Merge với audio nếu có
+    if keep_audio and batch_audio_files:
+        # Concat tất cả audio files
+        final_audio = os.path.join(temp_dir, "final_audio.aac")
+        
+        if len(batch_audio_files) > 1:
+            # Sử dụng concat demuxer cho audio, re-encode để tránh lỗi
+            audio_list_file = os.path.join(temp_dir, "audio_list.txt")
+            with open(audio_list_file, "w", encoding="utf-8") as f:
+                for af in batch_audio_files:
+                    escaped_path = af.replace("\\", "/").replace("'", "'\\''")
+                    f.write(f"file '{escaped_path}'\n")
+            
+            audio_concat_cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", audio_list_file,
+                "-c:a", "aac", "-b:a", "320k",
+                final_audio
+            ]
+            run(audio_concat_cmd)
+        else:
+            import shutil
+            shutil.copy(batch_audio_files[0], final_audio)
+        
+        # Merge video + audio
+        final_cmd = [
+            "ffmpeg", "-y",
+            "-i", final_video_only,
+            "-i", final_audio,
+            "-c:v", "copy",
+            "-c:a", "copy",
+            out_path
+        ]
+        run(final_cmd)
+    else:
+        import shutil
+        shutil.copy(final_video_only, out_path)
+
+
+def _render_direct(clips, out_path, width, height, fps, blur_amount,
+                   keep_audio, logo_path, transition_file, temp_dir):
+    """
+    Render trực tiếp cho số lượng clips nhỏ (phương pháp cũ)
+    """
     clip_files = []
     for idx, clip_cfg in enumerate(clips):
         video_layer = next((x for x in clip_cfg["layers"] if x["type"] == "video"), None)
@@ -331,18 +694,14 @@ def build_and_render_from_config(video_config_path, config_dict):
             continue
 
         video_path = video_layer["path"]
-        tmp_out = f"tmp_clip_{idx}_{uuid.uuid4().hex[:6]}.mp4"
+        tmp_out = os.path.join(temp_dir, f"tmp_clip_{idx}_{uuid.uuid4().hex[:6]}.mp4")
 
-        # ---- XÁC ĐỊNH CLIP CÓ PHẢI TRANSITION HAY KHÔNG ----
         is_transition_clip = "Transition.mov" in video_path
 
-        # Input cho ffmpeg
         inputs = ["-i", video_path]
         filter_complex = []
 
-        # ==== LOGIC OVERLAY LOGO ĐÃ ĐƯỢC SỬA ====
         if not is_transition_clip and logo_path and os.path.exists(logo_path):
-            # Có logo, KHÔNG phải transition => overlay logo
             inputs += ["-i", logo_path]
 
             filter_complex.append("[0:v]split=2[bg][fg]")
@@ -363,9 +722,7 @@ def build_and_render_from_config(video_config_path, config_dict):
             filter_complex.append(
                 f"[with_logo]fps={fps},setsar=1,format=yuv420p[outv]"
             )
-
         else:
-            # Là transition HOẶC không có logo => không overlay logo
             filter_complex.append("[0:v]split=2[bg][fg]")
             filter_complex.append(
                 f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
@@ -382,7 +739,6 @@ def build_and_render_from_config(video_config_path, config_dict):
                 f"[composed]fps={fps},setsar=1,format=yuv420p[outv]"
             )
 
-        # Render video clip
         cmd = ["ffmpeg", "-y", "-hwaccel", "cuda"] + inputs
         cmd += ["-filter_complex", ";".join(filter_complex)]
         cmd += ["-map", "[outv]"]
@@ -398,11 +754,11 @@ def build_and_render_from_config(video_config_path, config_dict):
         run(cmd)
         clip_files.append(tmp_out)
 
-    # === BƯỚC 2: Render transitions (KHÔNG có logo) ===
+    # Render transitions
     trans_files = []
     if transition_file:
         for idx in range(len(clip_files) - 1):
-            trans_tmp = f"tmp_trans_{idx}_{uuid.uuid4().hex[:6]}.mp4"
+            trans_tmp = os.path.join(temp_dir, f"tmp_trans_{idx}_{uuid.uuid4().hex[:6]}.mp4")
 
             cmd = [
                 "ffmpeg", "-y",
@@ -418,44 +774,42 @@ def build_and_render_from_config(video_config_path, config_dict):
             run(cmd)
             trans_files.append(trans_tmp)
 
-    # === BƯỚC 3: Concat video + transitions ===
+    # Concat video + transitions
     final_sequence = []
     for i, clip_file in enumerate(clip_files):
         final_sequence.append(clip_file)
         if i < len(trans_files):
             final_sequence.append(trans_files[i])
 
-    # FFmpeg concat input
-    inputs = []
-    for f in final_sequence:
-        inputs += ["-i", f]
+    # Sử dụng concat demuxer thay vì filter để tránh command quá dài
+    temp_video_only = os.path.join(temp_dir, "temp_video.mp4")
+    concat_videos_simple(final_sequence, temp_video_only, temp_dir)
 
-    n = len(final_sequence)
-    concat_filter = "".join([f"[{i}:v]" for i in range(n)])
-    concat_filter += f"concat=n={n}:v=1:a=0[outv]"
-
-    cmd = ["ffmpeg", "-y"] + inputs
-    cmd += ["-filter_complex", concat_filter]
-    cmd += ["-map", "[outv]"]
-
-    # === Audio render riêng ===
     if keep_audio:
-        audio_inputs = []
-        for cf in clip_files:
-            audio_inputs += ["-i", cf]
-
-        audio_filter = "".join([f"[{i}:a]" for i in range(len(clip_files))])
-        audio_filter += f"concat=n={len(clip_files)}:v=0:a=1[outa]"
-
-        temp_audio = f"temp_audio_{uuid.uuid4().hex[:6]}.aac"
-        audio_cmd = ["ffmpeg", "-y"] + audio_inputs
-        audio_cmd += ["-filter_complex", audio_filter]
-        audio_cmd += ["-map", "[outa]", "-c:a", "aac", "-b:a", "320k", temp_audio]
-        run(audio_cmd)
-
-        temp_video_only = f"temp_video_{uuid.uuid4().hex[:6]}.mp4"
-        cmd += ["-c:v", "h264_nvenc", "-preset", "p6", temp_video_only]
-        run(cmd)
+        # Concat audio riêng
+        temp_audio = os.path.join(temp_dir, "temp_audio.aac")
+        
+        if len(clip_files) > 1:
+            audio_list_file = os.path.join(temp_dir, "audio_clip_list.txt")
+            with open(audio_list_file, "w", encoding="utf-8") as f:
+                for cf in clip_files:
+                    escaped_path = cf.replace("\\", "/").replace("'", "'\\''")
+                    f.write(f"file '{escaped_path}'\n")
+            
+            audio_cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", audio_list_file,
+                "-vn",
+                "-c:a", "aac",
+                "-b:a", "320k",
+                temp_audio
+            ]
+            run(audio_cmd)
+        else:
+            audio_cmd = ["ffmpeg", "-y", "-i", clip_files[0], "-vn", "-c:a", "aac", "-b:a", "320k", temp_audio]
+            run(audio_cmd)
 
         final_cmd = [
             "ffmpeg", "-y",
@@ -466,33 +820,6 @@ def build_and_render_from_config(video_config_path, config_dict):
             out_path
         ]
         run(final_cmd)
-
-        if os.path.exists(temp_audio):
-            os.remove(temp_audio)
-        if os.path.exists(temp_video_only):
-            os.remove(temp_video_only)
-
     else:
-        cmd += ["-c:v", "h264_nvenc", "-preset", "p6", out_path]
-        run(cmd)
-
-    # === XÓA FILE TẠM ===
-    for f in clip_files + trans_files:
-        if os.path.exists(f):
-            os.remove(f)
-
-    print("✅ DONE:", out_path)
-    # Tìm root window để messagebox hiển thị phía trên
-    root = tk._default_root
-    if root:
-        for widget in root.winfo_children():
-            if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
-                widget.attributes('-topmost', True)
-                messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}", parent=widget)
-                widget.attributes('-topmost', False)
-                break
-        else:
-            messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
-    else:
-        messagebox.showinfo("Hoàn thành", f"Render video thành công!\n\nĐường dẫn:\n{out_path}")
-    return out_path
+        import shutil
+        shutil.copy(temp_video_only, out_path)

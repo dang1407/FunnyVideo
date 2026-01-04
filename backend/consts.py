@@ -9,3 +9,6 @@ CHANNELS_DIR = PROJECT_ROOT / "Channels"
 MAIN_CLIPS_DIR = os.path.join(PROJECT_ROOT, "Main_clips")
 OUT_DIR = PROJECT_ROOT / "Output"
 HISTORY_IN_CHANNEL_FOLDER = "history"
+
+
+CODEC_NAME = 'Apple ProRes 422'
