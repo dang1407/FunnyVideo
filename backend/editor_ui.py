@@ -249,9 +249,6 @@ class EditorWindow(ctk.CTkToplevel):
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 clip để export!")
             return
         config_path = build_editly_config(self.channel_name, config=config, selected_clips=clip_to_export, output_path=OUT_DIR / self.channel_name)
-        used_videos_path = get_used_videos_path(self.channel_name)
-        save_used_videos(clip_to_export, used_videos_path)
-        save_render_history(self.imported_clips, load_channel_path(self.channel_name))
         # Tạo đường dẫn output
         temp_dir_for_channel = os.path.join(TEMP_DIR, self.channel_name)
         os.makedirs(temp_dir_for_channel, exist_ok=True)
@@ -265,7 +262,9 @@ class EditorWindow(ctk.CTkToplevel):
                 config_path,
                 xml_path
             )
-            
+            used_videos_path = get_used_videos_path(self.channel_name)
+            save_used_videos(clip_to_export, used_videos_path)
+            save_render_history(self.imported_clips, load_channel_path(self.channel_name))
             # Thông báo thành công
             messagebox.showinfo(
                 "Thành công", 
