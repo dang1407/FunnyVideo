@@ -65,6 +65,15 @@ class ClipViewerApp(ctk.CTkToplevel):
         self.date_combo = ctk.CTkComboBox(top_frame, values=[], command=self._on_date_cb, width=200)
         self.date_combo.pack(side="left", padx=5)
         
+        # Bottom Button Frame (pack trước để luôn hiển thị)
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(side="bottom", fill="x", padx=10, pady=10)
+        
+        render_btn = ctk.CTkButton(btn_frame, text="Render lại clip đã chọn", 
+                                   command=self._open_editor_window, 
+                                   font=("Arial", 14, "bold"), height=40)
+        render_btn.pack(fill="x")
+        
         # Treeview (Data Table)
         # Treeview is not available in CTk. We use ttk.Treeview but wrap it or style it.
         tree_frame = ctk.CTkFrame(self)
@@ -78,11 +87,15 @@ class ClipViewerApp(ctk.CTkToplevel):
                         foreground="white", 
                         fieldbackground="#2b2b2b", 
                         font=("Arial", 12),
-                        rowheight=32)
+                        rowheight=80,
+                        borderwidth=1,
+                        relief="solid")
         style.configure("Treeview.Heading",
                         font=("Arial", 13, "bold"),
                         background="#1f1f1f",
-                        foreground="white")
+                        foreground="white",
+                        borderwidth=1,
+                        relief="solid")
         style.map('Treeview', background=[('selected', '#1f538d')])
         style.map('Treeview.Heading',
                   background=[('active', 'white'), ('!active', 'white')],
@@ -96,25 +109,16 @@ class ClipViewerApp(ctk.CTkToplevel):
         self.tree.heading("duration", text="Thời Lượng (s)")
         self.tree.heading("clips_list", text="Danh sách clip")
         
-        self.tree.column("index", width=50, anchor="center")
-        self.tree.column("time", width=150, anchor="center")
-        self.tree.column("duration", width=100, anchor="center")
-        self.tree.column("clips_list", width=400, anchor="w")
+        self.tree.column("index", width=25, anchor="center")
+        self.tree.column("time", width=125, anchor="center")
+        self.tree.column("duration", width=60, anchor="center")
+        self.tree.column("clips_list", width=700, anchor="w")
         
         scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
         
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
-        # Bottom Button Frame
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=10, pady=10)
-        
-        render_btn = ctk.CTkButton(btn_frame, text="Render lại clip đã chọn", 
-                                   command=self._open_editor_window, 
-                                   font=("Arial", 14, "bold"), height=40)
-        render_btn.pack(side="bottom", fill="x") # Or center it?
         
     def _on_year_cb(self, value):
         self.on_year_select(None)
@@ -166,17 +170,41 @@ class ClipViewerApp(ctk.CTkToplevel):
         try:
             val = self.date_combo.get()
             if not val: return
-            file_name = val + ".json"
+            # Xây dựng lại tên file từ year, month, day (dd)
+            file_name = f"{self.year}_{self.month}_{val}.json"
             file_path = os.path.join(self.history_folder_path, str(self.year), str(self.month), file_name)
             self.current_data = read_json_file_content(file_path)
 
+            # Tính số dòng tối đa cần thiết (mỗi dòng hiển thị 3 video)
+            max_lines = 1
+            for clip in self.current_data:
+                clip_data = clip.get("clips", [])
+                num_lines = (len(clip_data) + 2) // 3  # Làm tròn lên
+                max_lines = max(max_lines, num_lines)
+            
+            # Tự động điều chỉnh rowheight dựa trên số dòng (mỗi dòng ~24px)
+            dynamic_height = max(80, min(200, 24 + (max_lines * 24)))
+            style = ttk.Style()
+            style.configure("Treeview", rowheight=dynamic_height)
+
             for index, clip in enumerate(self.current_data):
                 clip_data = clip.get("clips", [])
-                render_time = clip.get("datetime")
-                sum_duration = sum(c.get("duration", 0) for c in clip_data)
+                raw_time = clip.get("datetime")
+                try:
+                    dt = datetime.datetime.fromisoformat(raw_time)
+                    render_time = dt.strftime("%H:%M %d/%m/%Y")
+                except:
+                    render_time = raw_time
+                sum_duration = sum(c.get("duration", 0) for c in clip_data if c.get('var') == True)
                 clip_names = [os.path.basename(c.get("path", "")) for c in clip_data]
                 
-                self.tree.insert("", "end", values=(index + 1, render_time, round(sum_duration, 2), ", ".join(clip_names)))
+                # Tự động xuống dòng sau mỗi 3 video
+                formatted_names = []
+                for i in range(0, len(clip_names), 3):
+                    formatted_names.append(", ".join(clip_names[i:i+3]))
+                clips_display = "\n".join(formatted_names)
+                
+                self.tree.insert("", "end", values=(index + 1, render_time, round(sum_duration, 2), clips_display))
         except Exception as e:
             print("Error loading date:", e)
             self.current_data = []
@@ -206,7 +234,7 @@ class ClipViewerApp(ctk.CTkToplevel):
                     "path": clip.get("path"),
                     "duration": clip.get("duration"),
                     "thumb_path": thumb_path,
-                    "var": ctk.BooleanVar(value=True) # Use ctk variable
+                    "var": ctk.BooleanVar(value=clip.get("var", True)) # Lấy giá trị đã lưu
                 }
                 editor.imported_clips.append(clip_obj)
             
@@ -232,4 +260,6 @@ class ClipViewerApp(ctk.CTkToplevel):
             file_names_raw = sorted(file_names_raw, key=lambda x: datetime.datetime.strptime(x.replace(".json", ""), "%Y_%m_%d"))
         if file_names_raw is None:
             return []
-        return [f.replace(".json", "") for f in file_names_raw]
+        # Trích xuất chỉ ngày (dd) từ tên file yyyy_mm_dd
+        return [f.replace(".json", "").split("_")[2] for f in file_names_raw]
+
