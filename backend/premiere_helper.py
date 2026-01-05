@@ -791,7 +791,8 @@ def generate_premiere_xml(config_path, output_xml_path=None):
     
     # Thêm XML declaration với encoding
     xml_string = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n' + xml_string.split('\n', 1)[1]
-    
+    os.makedirs(os.path.dirname(output_xml_path), exist_ok=True)
+
     with open(output_xml_path, 'w', encoding='utf-8') as f:
         f.write(xml_string)
     
