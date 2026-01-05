@@ -109,10 +109,10 @@ class ClipViewerApp(ctk.CTkToplevel):
         self.tree.heading("duration", text="Thời Lượng (s)")
         self.tree.heading("clips_list", text="Danh sách clip")
         
-        self.tree.column("index", width=25, anchor="center")
-        self.tree.column("time", width=125, anchor="center")
-        self.tree.column("duration", width=60, anchor="center")
-        self.tree.column("clips_list", width=700, anchor="w")
+        self.tree.column("index", width=60, minwidth=60, stretch=False, anchor="center")
+        self.tree.column("time", width=150, minwidth=150, stretch=False, anchor="center")
+        self.tree.column("duration", width=125, minwidth=125, stretch=False, anchor="center")
+        self.tree.column("clips_list", width=500, minwidth=300, stretch=True, anchor="w")
         
         scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -203,6 +203,7 @@ class ClipViewerApp(ctk.CTkToplevel):
                 for i in range(0, len(clip_names), 3):
                     formatted_names.append(", ".join(clip_names[i:i+3]))
                 clips_display = "\n".join(formatted_names)
+                clips_display += "\n"
                 
                 self.tree.insert("", "end", values=(index + 1, render_time, round(sum_duration, 2), clips_display))
         except Exception as e:
