@@ -563,22 +563,22 @@ def build_editly_config(channel_name: str, config: dict, selected_clips: list, o
             })
 
         # --- 2) Gap đen (nếu có) ---
-        # if gap_s > 0:
-        #     gap_clip = black_gap_clip(gap_s)
-        #     if trans_frames > 0:
-        #         # transition phần giữa (sau pre_s)
-        #         gap_clip["layers"].append({
-        #             "type": "video",
-        #             "path": trans_path,
-        #             "start": 0.0,  # chạy từ đầu đoạn gap trên transition file (cutted bằng cutFrom)
-        #             "stop": gap_s,
-        #             "cutFrom": min(pre_s, trans_duration_s),
-        #             "cutTo": min(pre_s + gap_s, trans_duration_s),
-        #             "resizeMode": "contain",
-        #             "mixVolume": 1
-        #         })
-        #     clips_json.append(gap_clip)
-        #     all_duration += gap_s
+        if gap_s > 0:
+            gap_clip = black_gap_clip(gap_s)
+            # if trans_frames > 0:
+            #     # transition phần giữa (sau pre_s)
+            #     gap_clip["layers"].append({
+            #         "type": "video",
+            #         "path": trans_path,
+            #         "start": 0.0,  # chạy từ đầu đoạn gap trên transition file (cutted bằng cutFrom)
+            #         "stop": gap_s,
+            #         "cutFrom": min(pre_s, trans_duration_s),
+            #         "cutTo": min(pre_s + gap_s, trans_duration_s),
+            #         "resizeMode": "contain",
+            #         "mixVolume": 1
+            #     })
+            clips_json.append(gap_clip)
+            all_duration += gap_s
 
         # --- 3) Clip B với phần "post" transition đè lên đầu clip B ---
         clipB_obj = main_clip_layer(clipB_path, 0.0, clipB_dur)
