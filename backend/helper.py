@@ -1,6 +1,7 @@
 import json
 import cv2
 from PIL import Image
+import subprocess
 from consts import *
 
 def read_all_folder_name(folder_path):
@@ -82,3 +83,35 @@ def get_video_info(file_path):
     except Exception as e:
         print(f"Lỗi khi xử lý video {file_path}: {e}")
         return 0, None, 0, 0
+def get_pixel_aspect_ratio(file_path):
+    """
+    Trả về pixel aspect ratio (float)
+    Mặc định = 1.0 nếu không xác định
+    """
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=sample_aspect_ratio",
+            "-of", "json",
+            file_path
+        ]
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        data = json.loads(result.stdout)
+        sar = data["streams"][0].get("sample_aspect_ratio", "1:1")
+
+        if sar and sar != "0:1":
+            num, den = sar.split(":")
+            return float(num) / float(den)
+
+    except Exception:
+        pass
+
+    return 1.0

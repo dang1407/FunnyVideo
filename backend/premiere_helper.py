@@ -27,7 +27,7 @@ from datetime import datetime
 import urllib.parse
 import subprocess
 from consts import CODEC_NAME
-from helper import get_video_info
+from helper import get_pixel_aspect_ratio, get_video_info
 
 PPRO_TICKS_PER_SECOND = 254_016_000_000
 
@@ -187,7 +187,7 @@ def create_parameter(parent, pid, name, value=None,
     return param
 
 # Scale height
-def create_basic_motion_filter(parent, output_size, video_size):
+def create_basic_motion_filter(parent, output_size, video_size, pixel_aspect_ratio):
     filter_el = ET.SubElement(parent, "filter")
     effect = ET.SubElement(filter_el, "effect")
 
@@ -198,9 +198,12 @@ def create_basic_motion_filter(parent, output_size, video_size):
     add_text(effect, "mediatype", "video")
     add_text(effect, "pproBypass", "false")
 
-    create_parameter(effect, "scale", "Scale",
+    if pixel_aspect_ratio:
+        create_parameter(effect, "scale", "Scale",
+                     value=f"{round((output_size/(video_size * pixel_aspect_ratio)) * 100, 1)}", valuemin="0", valuemax="1000")
+    else: 
+        create_parameter(effect, "scale", "Scale",
                      value=f"{round((output_size/video_size) * 100, 1)}", valuemin="0", valuemax="1000")
-
     create_parameter(effect, "rotation", "Rotation",
                      value="0", valuemin="-8640", valuemax="8640")
 
@@ -447,7 +450,7 @@ def generate_premiere_xml(config_path, output_xml_path=None):
     defined_files = set()  # Các file đã được định nghĩa đầy đủ
     current_frame = 0
     
-    def create_file_element(parent, path, file_id, video_width, video_height, duration, is_logo = False):
+    def create_file_element(parent, path, file_id, video_width, video_height, duration, is_logo = False, pixel_aspect_ratio = None):
         """Tạo file element - đầy đủ nếu lần đầu, chỉ id nếu đã định nghĩa"""
         file_elem = ET.SubElement(parent, 'file')
         file_elem.set('id', file_id)
@@ -484,7 +487,7 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             ET.SubElement(sample, 'width').text = str(video_width)
             ET.SubElement(sample, 'height').text = str(video_height)
             ET.SubElement(sample, 'anamorphic').text = 'FALSE'
-            ET.SubElement(sample, 'pixelaspectratio').text = 'square'
+            ET.SubElement(sample, 'pixelaspectratio').text = str(pixel_aspect_ratio) if pixel_aspect_ratio else 'square'
             ET.SubElement(sample, 'fielddominance').text = 'none'
             if is_logo != True:
                 add_audio(media_elem, 1, 2)
@@ -542,6 +545,7 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             path = video_layer['path']
             blur = video_layer['blur']
             thumb_duration, thumb_path, video_width, video_height = get_video_info(path)
+            pixel_aspect_ratio = get_pixel_aspect_ratio(path)
             cut_from = video_layer.get('cutFrom', 0)
             cut_to = video_layer.get('cutTo', 0)
             clip_duration = cut_to - cut_from if cut_to else 0
@@ -579,9 +583,9 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             # File reference - sử dụng helper function
             create_file_element(bg_blur_video, path, media_files[path], video_width, video_height, ci_duration_frame_float, )
             # Filter
-            create_basic_motion_filter(bg_blur_video, width, video_width)
+            create_basic_motion_filter(bg_blur_video, width, video_width, pixel_aspect_ratio)
 
-            create_distort_filter(bg_blur_video, width, height, video_width, video_height)
+            # create_distort_filter(bg_blur_video, width, height, video_width, video_height)
             create_gaussian_blur_filter(bg_blur_video, blur)
             # Log and color
             create_log_and_color_element(bg_blur_video)
@@ -628,7 +632,7 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             # File reference - sử dụng helper function
             create_file_element(clipitem, path, media_files[path], video_width, video_height, ci_duration_frame_float)
             # Filter
-            create_basic_motion_filter(clipitem, height, video_height)            
+            create_basic_motion_filter(clipitem, height, video_height, None)            
             add_links(clipitem, track_v2_clipitem_id, 1, tracka1_clip_item_id, 2, tracka2_clip_item_id, 3)
             # Log and color
             create_log_and_color_element(clipitem)
