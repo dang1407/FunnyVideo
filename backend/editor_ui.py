@@ -81,8 +81,8 @@ class EditorWindow(ctk.CTkToplevel):
         ctk.CTkButton(control_panel, text="Import Clips...", command=self._import_clips_from_dialog).pack(side="left",
                                                                                                           padx=10,
                                                                                                           pady=10)
-        ctk.CTkButton(control_panel, text="Render Video", command=self._render_video, fg_color="green").pack(
-            side="left", padx=10, pady=10)
+        # ctk.CTkButton(control_panel, text="Render Video", command=self._render_video, fg_color="green").pack(
+        #     side="left", padx=10, pady=10)
         ctk.CTkButton(control_panel, text="Export Premiere XML", command=self._export_premiere_xml, fg_color="#9B59B6").pack(
             side="left", padx=10, pady=10)
 
@@ -249,7 +249,9 @@ class EditorWindow(ctk.CTkToplevel):
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 clip để export!")
             return
         config_path = build_editly_config(self.channel_name, config=config, selected_clips=clip_to_export, output_path=OUT_DIR / self.channel_name)
-
+        used_videos_path = get_used_videos_path(self.channel_name)
+        save_used_videos(clip_to_export, used_videos_path)
+        save_render_history(self.imported_clips, load_channel_path(self.channel_name))
         # Tạo đường dẫn output
         temp_dir_for_channel = os.path.join(TEMP_DIR, self.channel_name)
         os.makedirs(temp_dir_for_channel, exist_ok=True)
