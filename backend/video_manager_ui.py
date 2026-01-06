@@ -149,7 +149,7 @@ class VideoManagerWindow(ctk.CTkToplevel):
         # Video List (Scrollable)
         self.video_list_frame = ctk.CTkScrollableFrame(
             main_container,
-            label_text="Danh sách Video Đã Dùng (tick = giữ lại, bỏ tick = xóa)"
+            label_text="Danh sách Video Đã Dùng"
         )
         self.video_list_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
