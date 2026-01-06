@@ -170,7 +170,7 @@ class DDList(ctk.CTkFrame):
         
         for i, it in enumerate(self._list_of_items):
             x = self._offset_x
-            y = self._offset_y + i * (self._item_height + 3.4 * self._gap)
+            y = self._offset_y + i * (self._item_height + self._gap)
             it.set_position(x, y)
             self._position[it] = i
 
