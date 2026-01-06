@@ -3,6 +3,7 @@ import cv2
 from PIL import Image
 import subprocess
 from consts import *
+import platform
 
 def read_all_folder_name(folder_path):
     try:
@@ -115,3 +116,15 @@ def get_pixel_aspect_ratio(file_path):
         pass
 
     return 1.0
+
+def open_file_cross_platform(path):
+    system = platform.system()
+    try:
+        if system == "Windows":
+            os.startfile(path)
+        elif system == "Darwin":  # macOS
+            subprocess.Popen(["open", path])
+        else:  # Linux, Ubuntu, v.v.
+            subprocess.Popen(["xdg-open", path])
+    except Exception as e:
+        print(f"Lỗi khi mở file: {e}")

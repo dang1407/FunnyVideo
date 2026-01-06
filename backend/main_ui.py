@@ -282,7 +282,7 @@ class ChannelSelectorApp(Tk):
             return
         
         self.withdraw()
-        open_video_manager(self, selected_channel_name, selected_topic)
+        open_video_manager(self, selected_channel_name)
 
     def _create_new_channel(self):
         dialog = ChannelCreationDialog(self, "Tạo kênh mới", self.initial_config_template)

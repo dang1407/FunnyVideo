@@ -1,5 +1,4 @@
 import customtkinter as ctk
-import platform
 from tkinter import filedialog
 from tkinterdnd2 import DND_FILES
 import json
@@ -8,8 +7,8 @@ import threading
 from clip_selector import save_used_videos, save_render_history
 from DragSortHelper import DDList, ClipItem
 from consts import *
-from helper import load_channel_path, get_video_info
-from render_helper import  generate_ffmpeg_command
+from helper import load_channel_path, get_video_info, open_file_cross_platform
+from render_helper import  generate_ffmpeg_command 
 from tkinter import  messagebox
 from tkinter.constants import *
 
@@ -821,14 +820,3 @@ def load_used_videos(channel_name):
             return []
     except Exception:
         return []
-def open_file_cross_platform(path):
-    system = platform.system()
-    try:
-        if system == "Windows":
-            os.startfile(path)
-        elif system == "Darwin":  # macOS
-            subprocess.Popen(["open", path])
-        else:  # Linux, Ubuntu, v.v.
-            subprocess.Popen(["xdg-open", path])
-    except Exception as e:
-        print(f"Lỗi khi mở file: {e}")
