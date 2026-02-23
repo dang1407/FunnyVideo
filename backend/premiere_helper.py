@@ -26,6 +26,7 @@ import uuid
 from datetime import datetime
 import urllib.parse
 import subprocess
+from xml_helper import add_audio_source_track, add_codec, add_rate
 from consts import CODEC_NAME
 from helper import get_pixel_aspect_ratio, get_video_info
 
@@ -128,18 +129,21 @@ def add_audio(parent_ele, channel_index, channel_count):
     ET.SubElement(sample, 'samplerate').text = '48000'
 
     ET.SubElement(aud, 'channelcount').text = f'{channel_count}'
-    # ET.SubElement(aud, 'layout').text = 'stereo'
+    ET.SubElement(aud, 'layout').text = 'stereo'
 
-    # audiochannel = ET.SubElement(aud, 'audiochannel')
-    # ET.SubElement(audiochannel, 'sourcechannel').text = F'{channel_index}'
-    # ET.SubElement(audiochannel, 'channellabel').text = 'left'
+    audiochannel = ET.SubElement(aud, 'audiochannel')
+    ET.SubElement(audiochannel, 'sourcechannel').text = F'{channel_index}'
+    channel_name = 'left'
+    if channel_index == 2:
+        channel_name = 'right'
+    ET.SubElement(audiochannel, 'channellabel').text = channel_name
 
 def add_text(parent, tag, text):
     el = ET.SubElement(parent, tag)
     el.text = str(text)
     return el
 
-def add_links(parent, video_clip_id, video_track_index, audio_clip_id_1, audio1_track_index, audio_clip_id_2, audio2_track_index):
+def add_links(parent, video_clip_id: str, video_track_index: int, audio_clip_id_1: str, audio1_track_index: int, audio_clip_id_2: str, audio2_track_index: int = None, group_audio1_index: int = None):
     # Link video
     link_video = ET.SubElement(parent, 'link')
     ET.SubElement(link_video, 'linkclipref').text = video_clip_id
@@ -153,15 +157,18 @@ def add_links(parent, video_clip_id, video_track_index, audio_clip_id_1, audio1_
     ET.SubElement(link_audio_1, 'mediatype').text = 'audio'
     ET.SubElement(link_audio_1, 'trackindex').text = str(audio1_track_index)
     ET.SubElement(link_audio_1, 'clipindex').text = '1'
-    ET.SubElement(link_audio_1, 'groupindex').text = '1'
+    if group_audio1_index != None:
+            ET.SubElement(link_audio_1, 'groupindex').text = str(group_audio1_index)
 
     # Link audio 2
-    link_audio_2 = ET.SubElement(parent, 'link')
-    ET.SubElement(link_audio_2, 'linkclipref').text = audio_clip_id_2
-    ET.SubElement(link_audio_2, 'mediatype').text = 'audio'
-    ET.SubElement(link_audio_2, 'trackindex').text = str(audio2_track_index)
-    ET.SubElement(link_audio_2, 'clipindex').text = '1'
-    ET.SubElement(link_audio_2, 'groupindex').text = '1'
+    if audio_clip_id_2 != None:
+        link_audio_2 = ET.SubElement(parent, 'link')
+        ET.SubElement(link_audio_2, 'linkclipref').text = audio_clip_id_2
+        ET.SubElement(link_audio_2, 'mediatype').text = 'audio'
+        ET.SubElement(link_audio_2, 'trackindex').text = str(audio2_track_index)
+        ET.SubElement(link_audio_2, 'clipindex').text = '1'
+        # if group_audio1_index != None:
+        #     ET.SubElement(link_audio_2, 'groupindex').text = str(group_audio1_index)
 
 def create_parameter(parent, pid, name, value=None,
                      valuemin=None, valuemax=None,
@@ -284,33 +291,103 @@ def set_video_track_default_att(track):
         track.set(k, v)
 
 def create_audio_sub_ele(audio_clipitem, master_clip_text, path, clip_duration, fps, current_frame, cut_from, cut_to, media_files):
+    duration_frame = get_duration_frames(clip_duration, fps)
     master_clip_tracka1 = ET.SubElement(audio_clipitem, 'masterclipid')
     master_clip_tracka1.text = master_clip_text
 
     aci_name = ET.SubElement(audio_clipitem, 'name')
     aci_name.text = os.path.basename(path)
-    
+    ET.SubElement(audio_clipitem, 'enabled').text = 'TRUE'
     aci_duration = ET.SubElement(audio_clipitem, 'duration')
-    aci_duration.text = str(get_duration_frames(clip_duration, fps))
+    aci_duration.text = str(duration_frame)
     
     aci_rate = ET.SubElement(audio_clipitem, 'rate')
     aci_timebase = ET.SubElement(aci_rate, 'timebase')
     aci_timebase.text = str(fps)
+    ET.SubElement(aci_rate, 'ntsc').text = 'FALSE'
     
     aci_start = ET.SubElement(audio_clipitem, 'start')
     aci_start.text = str(current_frame)
     
     aci_end = ET.SubElement(audio_clipitem, 'end')
-    aci_end.text = str(current_frame + get_duration_frames(clip_duration, fps))
+    aci_end.text = str(current_frame + duration_frame)
     
     aci_in = ET.SubElement(audio_clipitem, 'in')
-    aci_in.text = str(get_duration_frames(cut_from, fps))
+    aci_in.text = str(round(get_duration_frames(cut_from, fps), 0))
     
     aci_out = ET.SubElement(audio_clipitem, 'out')
-    aci_out.text = str(get_duration_frames(cut_to, fps))
+    aci_out.text = str(round(get_duration_frames(cut_to, fps), 0))
+    
+    ET.SubElement(audio_clipitem, 'pproTicksIn').text = 0
+    ET.SubElement(audio_clipitem, 'pproTicksOut').text = str(frames_to_ticks(duration_frame, fps))
     
     aci_file = ET.SubElement(audio_clipitem, 'file')
     aci_file.set('id', media_files[path])
+    
+    add_audio_source_track(audio_clipitem, 1)
+
+def create_audio_filter(parent):
+    filter_el = ET.SubElement(parent, "filter")
+    # effect
+    effect = ET.SubElement(filter_el, "effect")
+
+    ET.SubElement(effect, "name").text = "Audio Levels"
+    ET.SubElement(effect, "effectid").text = "audiolevels"
+    ET.SubElement(effect, "effectcategory").text = "audiolevels"
+    ET.SubElement(effect, "effecttype").text = "audiolevels"
+    ET.SubElement(effect, "mediatype").text = "audio"
+    ET.SubElement(effect, "pproBypass").text = "false"
+
+    # parameter
+    parameter = ET.SubElement(effect, "parameter", attrib={
+        "authoringApp": "PremierePro"
+    })
+
+    ET.SubElement(parameter, "parameterid").text = "level"
+    ET.SubElement(parameter, "name").text = "Level"
+    ET.SubElement(parameter, "valuemin").text = "0"
+    ET.SubElement(parameter, "valuemax").text = "3.98109"
+    ET.SubElement(parameter, "value").text = "1"
+
+def add_audio_levels_and_markers(parent):
+    # ===== FILTER / EFFECT =====
+    filter_el = ET.SubElement(parent, "filter")
+
+    effect = ET.SubElement(filter_el, "effect")
+
+    ET.SubElement(effect, "name").text = "Audio Levels"
+    ET.SubElement(effect, "effectid").text = "audiolevels"
+    ET.SubElement(effect, "effectcategory").text = "audiolevels"
+    ET.SubElement(effect, "effecttype").text = "audiolevels"
+    ET.SubElement(effect, "mediatype").text = "audio"
+    ET.SubElement(effect, "pproBypass").text = "false"
+
+    parameter = ET.SubElement(effect, "parameter", {
+        "authoringApp": "PremierePro"
+    })
+
+    ET.SubElement(parameter, "parameterid").text = "level"
+    ET.SubElement(parameter, "name").text = "Level"
+    ET.SubElement(parameter, "valuemin").text = "0"
+    ET.SubElement(parameter, "valuemax").text = "3.98109"
+    ET.SubElement(parameter, "value").text = "1"
+
+    # ===== MARKERS =====
+    add_marker(parent)
+    
+def add_marker(parent: ET.Element):
+    markers = [
+        (9, -1),
+        (9, -1),
+        (6, -1)
+    ]
+
+    for in_val, out_val in markers:
+        marker = ET.SubElement(parent, "marker")
+        ET.SubElement(marker, "comment").text = ""
+        ET.SubElement(marker, "name").text = ""
+        ET.SubElement(marker, "in").text = str(in_val)
+        ET.SubElement(marker, "out").text = str(out_val)   
 
 def generate_premiere_xml(config_path, output_xml_path=None):
     """
@@ -340,8 +417,27 @@ def generate_premiere_xml(config_path, output_xml_path=None):
     # Tạo root element
     xmeml = ET.Element('xmeml', version="4")
     
+    # Project
+    project = ET.SubElement(xmeml, 'project')
+    ET.SubElement(project, 'name').text = os.path.splitext(os.path.basename(output_xml_path))[0]
+    project_children = ET.SubElement(project, 'children')
+
+    sequence_bin = ET.SubElement(project_children, 'bin')
+    ET.SubElement(sequence_bin, 'name').text = 'Sequence'
+    labels = ET.SubElement(sequence_bin, 'labels')
+    ET.SubElement(labels, 'label2').text = 'Mango'
+
+    children = ET.SubElement(sequence_bin, 'children')
+
+    # Source bin
+    source_bin = ET.SubElement(project_children, 'bin')
+    ET.SubElement(source_bin, 'name').text = 'Source'
+    labels = ET.SubElement(source_bin, 'labels')
+    ET.SubElement(labels, 'label2').text = 'Mango'
+    source_bin_children = ET.SubElement(source_bin, 'children')
+
     # Tạo sequence
-    sequence = ET.SubElement(xmeml, 'sequence')
+    sequence = ET.SubElement(children, 'sequence')
     sequence.set('id', f"sequence-{uuid.uuid4().hex[:8]}")
 
     # sequence uuid 
@@ -388,6 +484,8 @@ def generate_premiere_xml(config_path, output_xml_path=None):
     sc_timebase.text = str(fps)
     ET.SubElement(sc_rate, 'ntsc').text = 'FALSE'
 
+    add_codec(sample_characteristics)
+
     codec = ET.SubElement(sample_characteristics, 'codec')
     ET.SubElement(codec, 'name').text = CODEC_NAME
     appspecificdata = ET.SubElement(codec, 'appspecificdata')
@@ -417,9 +515,11 @@ def generate_premiere_xml(config_path, output_xml_path=None):
 
     # Video Track 1 (blur video background)
     track_v1 = ET.SubElement(video, 'track')
+    # track_v1.set('name', 'track_v1')
     set_video_track_default_att(track_v1)
     # Video Track 2 (main video)
     track_v2 = ET.SubElement(video, 'track')
+    # track_v2.set('name', 'track_v2')
     
     # Overlay tracks (phải khai báo trong video section)
     track_v3 = ET.SubElement(video, 'track')  # Logo track
@@ -441,8 +541,9 @@ def generate_premiere_xml(config_path, output_xml_path=None):
     # Audio Track 1
     track_a1 = ET.SubElement(audio, 'track')
     track_a2 = ET.SubElement(audio, 'track')
-    track_a3 = ET.SubElement(audio, 'track')
+    is_set_track_a4 = False
     track_a4 = ET.SubElement(audio, 'track')
+    track_a3 = ET.SubElement(audio, 'track')
     # set_audio_track_default_att(track_a1)
     # set_audio_track_default_att(track_a2)
     # Thu thập tất cả media files và đánh dấu đã định nghĩa chưa
@@ -450,7 +551,7 @@ def generate_premiere_xml(config_path, output_xml_path=None):
     defined_files = set()  # Các file đã được định nghĩa đầy đủ
     current_frame = 0
     
-    def create_file_element(parent, path, file_id, video_width, video_height, duration, is_logo = False, pixel_aspect_ratio = None):
+    def create_file_element(parent, path, file_id, video_width, video_height, duration, is_logo = False, pixel_aspect_ratio = None, is_main_clip = False):
         """Tạo file element - đầy đủ nếu lần đầu, chỉ id nếu đã định nghĩa"""
         file_elem = ET.SubElement(parent, 'file')
         file_elem.set('id', file_id)
@@ -466,7 +567,8 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             file_time_base = ET.SubElement(file_rate, 'timebase')
             file_time_base.text = str(fps) 
             ET.SubElement(file_rate, 'ntsc').text = 'FALSE'
-            ET.SubElement(file_elem, 'duration').text = str(duration)
+            if duration != None:
+                ET.SubElement(file_elem, 'duration').text = str(int(round(duration, 0)))
             timecode = ET.SubElement(file_elem, 'timecode')
 
             rate = ET.SubElement(timecode, 'rate')
@@ -490,14 +592,14 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             ET.SubElement(sample, 'pixelaspectratio').text = str(pixel_aspect_ratio) if pixel_aspect_ratio else 'square'
             ET.SubElement(sample, 'fielddominance').text = 'none'
             if is_logo != True:
-                add_audio(media_elem, 1, 2)
-            # if is_main_clip == True:
-            #     add_audio(media_elem, 2, 1)
+                add_audio(media_elem, 1, 1)
+            if is_main_clip == True:
+                add_audio(media_elem, 2, 1)
             defined_files.add(path)
         
         return file_elem
 
-    def create_log_and_color_element(parent):
+    def create_log_and_color_element(parent, add_label = True):
         logginginfo = ET.SubElement(parent, "logginginfo")
         for tag in [
             "description",
@@ -522,10 +624,12 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             ET.SubElement(colorinfo, tag)
 
         # ----- labels -----
-        labels = ET.SubElement(parent, "labels")
-        label2 = ET.SubElement(labels, "label2")
-        label2.text = "Iris"
-
+        if add_label == True:
+            labels = ET.SubElement(parent, "labels")
+            label2 = ET.SubElement(labels, "label2")
+            label2.text = "Iris"
+    logo_path = ""
+    trans_path = ""
     for clip_idx, clip in enumerate(clips):
         layers = clip.get('layers', [])
         clip_duration = clip.get('duration', 0)
@@ -539,7 +643,22 @@ def generate_premiere_xml(config_path, output_xml_path=None):
         tracka2_clip_item_id = f"audio-clipitem-{clip_idx*10 + 2}"
         tracka3_clip_item_id = f"audio-clipitem-{clip_idx*10 + 3}"
         tracka4_clip_item_id = f"audio-clipitem-{clip_idx*10 + 4}"
-        tracka5_clip_item_id = f"audio-clipitem-{clip_idx*10 + 5}"
+
+        # id cho các clip trong source
+        source_clip_video_id = f"source-clipitem-{clip_idx * 10 + 1}"
+        source_clip_audio_id1 = f"source-clipitem-{clip_idx * 10 + 2}"
+        source_clip_audio_id2 = f"source-clipitem-{clip_idx * 10 + 3}"
+
+        # Id cho logo
+        master_clip_logo = f"masterclip-logo-1"
+        logo_clip_id = f"logo-clip-1"
+
+        # ID cho trans
+        
+        master_clip_trans = f"master-clip-trans-1"
+        trans_video_clip_id = "transitem-1" 
+        trans_audio_clip_id1 = "transitem-2" 
+        trans_audio_clip_id2 = "transitem-3" 
         
         if video_layer:
             path = video_layer['path']
@@ -573,15 +692,15 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             ET.SubElement(ci_rate_trackv1, 'ntsc').text = 'FALSE'
             ET.SubElement(bg_blur_video, 'start').text = str(current_frame)
             ET.SubElement(bg_blur_video, 'end').text = str(current_frame + ci_duration_frame_float)
-            ET.SubElement(bg_blur_video, 'in').text = str(get_duration_frames(cut_from, fps))
-            ET.SubElement(bg_blur_video, 'out').text = str(get_duration_frames(cut_to, fps))
+            ET.SubElement(bg_blur_video, 'in').text = str(round(get_duration_frames(cut_from, fps), 0))
+            ET.SubElement(bg_blur_video, 'out').text = str(round(get_duration_frames(cut_to, fps), 0))
             ET.SubElement(bg_blur_video, 'pproTicksIn').text = '0'
             ET.SubElement(bg_blur_video, 'pproTicksOut').text = str(frames_to_ticks(ci_duration_frame_float, fps))
             ET.SubElement(bg_blur_video, 'alphatype').text = 'none'
             ET.SubElement(bg_blur_video, 'pixelaspectratio').text = 'square'
             ET.SubElement(bg_blur_video, 'anamorphic').text = 'FALSE'
             # File reference - sử dụng helper function
-            create_file_element(bg_blur_video, path, media_files[path], video_width, video_height, ci_duration_frame_float, )
+            create_file_element(bg_blur_video, path, media_files[path], video_width, video_height, ci_duration_frame_float, is_main_clip=True)
             # Filter
             create_basic_motion_filter(bg_blur_video, width, video_width, pixel_aspect_ratio)
 
@@ -619,21 +738,21 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             ci_end.text = str(current_frame + ci_duration_frame_float)
             
             ci_in = ET.SubElement(clipitem, 'in')
-            ci_in.text = str(get_duration_frames(cut_from, fps))
+            ci_in.text = str(round(get_duration_frames(cut_from, fps), 0))
             
             ci_out = ET.SubElement(clipitem, 'out')
-            ci_out.text = str(get_duration_frames(cut_to, fps))
+            ci_out.text = str(round(get_duration_frames(cut_to, fps), 0))
             
             ET.SubElement(clipitem, 'pproTicksIn').text = '0'
             ET.SubElement(clipitem, 'pproTicksOut').text = str(frames_to_ticks(ci_duration_frame_float, fps))
             ET.SubElement(clipitem, 'alphatype').text = 'none'
-            ET.SubElement(clipitem, 'pixelaspectratio').text = 'square'
-            ET.SubElement(clipitem, 'anamorphic').text = 'FALSE'
+            # ET.SubElement(clipitem, 'pixelaspectratio').text = 'square'
+            # ET.SubElement(clipitem, 'anamorphic').text = 'FALSE'
             # File reference - sử dụng helper function
             create_file_element(clipitem, path, media_files[path], video_width, video_height, ci_duration_frame_float)
             # Filter
             create_basic_motion_filter(clipitem, height, video_height, None)            
-            add_links(clipitem, track_v2_clipitem_id, 1, tracka1_clip_item_id, 2, tracka2_clip_item_id, 3)
+            # add_links(clipitem, track_v2_clipitem_id, 1, tracka1_clip_item_id, 2, tracka2_clip_item_id, 3)
             # Log and color
             create_log_and_color_element(clipitem)
             # # filter
@@ -645,16 +764,65 @@ def generate_premiere_xml(config_path, output_xml_path=None):
             audio_clipitem_a1 = ET.SubElement(track_a1, 'clipitem')
             audio_clipitem_a1.set('id', tracka1_clip_item_id)
             create_audio_sub_ele(audio_clipitem_a1, master_clip_text, path, clip_duration, fps, current_frame, cut_from, cut_to, media_files)
+            # add_audio_source_track(audio_clipitem_a1, 1)
+            create_audio_filter(audio_clipitem_a1)
+            create_log_and_color_element(audio_clipitem_a1)
 
             audio_clipitem_a2 = ET.SubElement(track_a2, 'clipitem')
             audio_clipitem_a2.set('id', tracka2_clip_item_id)
             create_audio_sub_ele(audio_clipitem_a2, master_clip_text, path, clip_duration, fps, current_frame, cut_from, cut_to, media_files)
-
+            # add_audio_source_track(audio_clipitem_a2, 1)
+            create_audio_filter(audio_clipitem_a2)
+            create_log_and_color_element(audio_clipitem_a2)
             
             # Thêm link clip background và 2 audio với nhau 
-            add_links(audio_clipitem_a1, track_v2_clipitem_id, 1, tracka1_clip_item_id, 2, tracka2_clip_item_id, 3)
-            add_links(audio_clipitem_a2, track_v2_clipitem_id, 1, tracka1_clip_item_id, 2, tracka2_clip_item_id, 3)
+            # add_links(audio_clipitem_a1, track_v2_clipitem_id, 1, tracka1_clip_item_id, 2, tracka2_clip_item_id, 3)
+            # add_links(audio_clipitem_a2, track_v2_clipitem_id, 1, tracka1_clip_item_id, 2, tracka2_clip_item_id, 3)
             
+            # Logic cho Source bin
+            source_clip = ET.SubElement(source_bin_children, 'clip')
+            source_clip.set('id', master_clip_text)
+            source_clip.set('explodedTracks', 'true')
+            ET.SubElement(source_clip, 'uuid').text = str(uuid.uuid4())
+            ET.SubElement(source_clip, 'masterclipid').text = master_clip_text
+            ET.SubElement(source_clip, 'ismasterclip').text = 'TRUE'
+            ET.SubElement(source_clip, 'duration').text = str(ci_duration_frame_float)
+            add_rate(source_clip, fps, 'FALSE')
+            ET.SubElement(source_clip, 'name').text = os.path.basename(path)
+            clip_media = ET.SubElement(source_clip, 'media')
+            clip_video = ET.SubElement(clip_media, 'video')
+            video_track = ET.SubElement(clip_video, 'track')
+            clipitem = ET.SubElement(video_track, 'clipitem')
+            clipitem.set('id', source_clip_video_id)
+            ET.SubElement(clipitem, 'masterclipid').text = master_clip_text
+            ET.SubElement(clipitem, 'name').text = os.path.basename(path)
+            add_rate(clipitem, fps, 'FALSE')
+            ET.SubElement(clipitem, 'alphatype').text = 'none'
+            create_file_element(clipitem, path, media_files[path], video_width, video_height, ci_duration_frame_float)
+            add_links(clipitem, source_clip_video_id, 1,  source_clip_audio_id1, 1, source_clip_audio_id2, 2)
+
+            clip_audio = ET.SubElement(clip_media, 'audio')
+            audio_track1 = ET.SubElement(clip_audio, 'track')
+            audio_track1_clipitem = ET.SubElement(audio_track1, 'clipitem')
+            audio_track1_clipitem.set('id', source_clip_audio_id1)
+            ET.SubElement(audio_track1_clipitem, 'masterclipid').text = master_clip_text
+            ET.SubElement(audio_track1_clipitem, 'name').text = os.path.basename(path)
+            add_rate(audio_track1_clipitem, fps, 'FALSE')
+            create_file_element(audio_track1_clipitem, path, media_files[path], video_width, video_height, ci_duration_frame_float)
+            add_audio_source_track(audio_track1_clipitem, 1)
+            add_links(audio_track1_clipitem, source_clip_video_id, 1, source_clip_audio_id1, 1, source_clip_audio_id2, 2)
+
+            audio_track2 = ET.SubElement(clip_audio, 'track')
+            audio_track2_clipitem = ET.SubElement(audio_track2, 'clipitem')
+            audio_track2_clipitem.set('id', source_clip_audio_id2)
+            ET.SubElement(audio_track2_clipitem, 'masterclipid').text = master_clip_text
+            ET.SubElement(audio_track2_clipitem, 'name').text = os.path.basename(path)
+            add_rate(audio_track2_clipitem, fps, 'FALSE')
+            create_file_element(audio_track2_clipitem, path, media_files[path], video_width, video_height, ci_duration_frame_float)
+            add_audio_source_track(audio_track2_clipitem, 2)
+            add_links(audio_track2_clipitem, source_clip_video_id, 1, source_clip_audio_id1, 1, source_clip_audio_id2, 2)
+
+            create_log_and_color_element(source_clip)
         elif fill_color:
             clip_duration = clip.get('duration', 0.1)
         
@@ -668,24 +836,32 @@ def generate_premiere_xml(config_path, output_xml_path=None):
                 
                 logo_item = ET.SubElement(track_v3, 'clipitem')
                 logo_item.set('id', f"logo-{clip_idx}")
-                
+                ET.SubElement(logo_item, 'masterclipid').text = master_clip_logo
                 logo_name = ET.SubElement(logo_item, 'name')
                 logo_name.text = os.path.basename(logo_path)
+                ET.SubElement(logo_item, 'enabled').text = 'TRUE'
                 
-                logo_duration = ET.SubElement(logo_item, 'duration')
-                logo_duration.text = str(get_duration_frames(clip_duration, fps))
+                logo_clip_duration_frame = get_duration_frames(clip_duration, fps)
+                ET.SubElement(logo_item, 'duration').text = str(frames_to_ticks(get_duration_frames(total_duration, fps), fps))
+                add_rate(logo_item, fps, 'FALSE')
                 
                 logo_start = ET.SubElement(logo_item, 'start')
                 logo_start.text = str(current_frame)
                 
                 logo_end = ET.SubElement(logo_item, 'end')
-                logo_end.text = str(current_frame + get_duration_frames(clip_duration, fps))
+                logo_end.text = str(current_frame + logo_clip_duration_frame)
 
                 ET.SubElement(logo_item, 'in').text = '100000'
-                ET.SubElement(logo_item, 'out').text = f'{100000 + clip_duration}'
-                
+                ET.SubElement(logo_item, 'out').text = f'{100000 + round(clip_duration, 0)}'
+                ET.SubElement(logo_item, 'pproTicksIn').text = '0'
+                ET.SubElement(logo_item, 'pproTicksOut').text = str(frames_to_ticks(logo_clip_duration_frame, fps))
+                ET.SubElement(logo_item, 'alphatype').text = 'straight'
+                # if logo_path not in media_files:
+                if clip_idx == 0:
+                    ET.SubElement(logo_item, 'pixelaspectratio').text = 'square'
+                    ET.SubElement(logo_item, 'anamorphic').text = 'FALSE'
                 # File reference - sử dụng helper function
-                create_file_element(logo_item, logo_path, media_files[logo_path], width, height, total_duration, True)
+                create_file_element(logo_item, logo_path, media_files[logo_path], width, height, None, True)
 
                 create_log_and_color_element(logo_item)
             
@@ -697,7 +873,6 @@ def generate_premiere_xml(config_path, output_xml_path=None):
                 trans_cut_from = layer.get('cutFrom', 0)
                 trans_cut_to = layer.get('cutTo', 0)
                 trans_item_id = f"trans-{clip_idx*10+1}"
-                master_clip_trans = f"master-clip-trans-{clip_idx*10+1}"
                 trans_duration_frame = get_duration_frames(trans_stop - trans_start, fps)
                 if trans_path not in media_files:
                     media_files[trans_path] = f"file-{len(media_files) + 1}"
@@ -710,9 +885,11 @@ def generate_premiere_xml(config_path, output_xml_path=None):
                 
                 trans_name = ET.SubElement(trans_item, 'name')
                 trans_name.text = os.path.basename(trans_path)
+                ET.SubElement(trans_item, 'enabled').text = 'TRUE'
                 
                 trans_duration = ET.SubElement(trans_item, 'duration')
                 trans_duration.text = str(trans_duration_frame)
+                add_rate(trans_item, fps, 'FALSE')
                 
                 trans_start_elem = ET.SubElement(trans_item, 'start')
                 trans_start_frame = current_frame + get_duration_frames(trans_start, fps)
@@ -723,31 +900,97 @@ def generate_premiere_xml(config_path, output_xml_path=None):
                 trans_end.text = str(trans_end_frame)
                 
                 trans_in = ET.SubElement(trans_item, 'in')
-                trans_in.text = str(get_duration_frames(trans_cut_from, fps))
+                trans_in.text = str(round(get_duration_frames(trans_cut_from, fps), 0))
                 
                 trans_out = ET.SubElement(trans_item, 'out')
-                trans_out.text = str(get_duration_frames(trans_cut_to, fps))
+                trans_out.text = str(round(get_duration_frames(trans_cut_to, fps), 0))
 
                 ET.SubElement(trans_item, 'pproTicksIn').text = '0'
                 ET.SubElement(trans_item, 'pproTicksOut').text = str(frames_to_ticks(trans_duration_frame, fps))
+                ET.SubElement(trans_item, 'alphatype').text = 'straight'
+                ET.SubElement(trans_item, 'pixelaspectratio').text = 'square'
+                ET.SubElement(trans_item, 'anamorphic').text = 'FALSE'
 
                 # File reference - sử dụng helper function
-                create_file_element(trans_item, trans_path, media_files[trans_path], width, height, trans_duration_frame)
+                create_file_element(trans_item, trans_path, media_files[trans_path], width, height, trans_duration_frame, is_main_clip=True)
+                add_marker(trans_item)
+                # ET.SubElement(trans_item, 'pixelaspectratio').text = 'square'
+                # ET.SubElement(trans_item, 'anamorphic').text = 'FALSE'
+
+                add_links(trans_item, trans_item_id, 4, tracka3_clip_item_id, 3, audio_clip_id_2=None, group_audio1_index=1)
                 # Thêm log
                 create_log_and_color_element(trans_item)
-
-                add_links(trans_item, trans_item_id, 4, tracka3_clip_item_id, 3, tracka4_clip_item_id, 4)
+                
                 # todo: add audio track for transition
                 audio_clipitem_a3 = ET.SubElement(track_a3, 'clipitem')
                 audio_clipitem_a3.set('id', tracka3_clip_item_id)
+                # ET.SubElement(audio_clipitem_a3, 'masterclipid').text = master_clip_trans
                 create_audio_sub_ele(audio_clipitem_a3, master_clip_trans, trans_path, trans_stop - trans_start, fps, trans_start_frame, trans_cut_from, trans_cut_to, media_files)
-                add_links(audio_clipitem_a3, trans_item_id, 4, tracka3_clip_item_id, 3, tracka4_clip_item_id, 4)
+                add_audio_levels_and_markers(audio_clipitem_a3)
+                add_links(audio_clipitem_a3, trans_item_id, 4, tracka3_clip_item_id, 3, audio_clip_id_2=None, group_audio1_index=1)
+                create_log_and_color_element(audio_clipitem_a3, False)
+                # audio_clipitem_a4 = ET.SubElement(track_a4, 'clipitem')
+                # audio_clipitem_a4.set('id', tracka4_clip_item_id)
+                # # ET.SubElement(audio_clipitem_a4, 'masterclipid').text = master_clip_trans
+                # create_audio_sub_ele(audio_clipitem_a4, master_clip_trans, trans_path, trans_stop - trans_start, fps, trans_start_frame, trans_cut_from, trans_cut_to, media_files)
+                # add_audio_levels_and_markers(audio_clipitem_a4)
+                # add_links(audio_clipitem_a4, trans_item_id, 4, tracka3_clip_item_id, 3, audio_clip_id_2=None)
+                if is_set_track_a4 == False: 
+                    trans_item_track_a4 = ET.SubElement(track_a4, 'clipitem')
+                    trans_item_track_a4.set('id', 'tran-track-a3-id-1')
 
-                audio_clipitem_a4 = ET.SubElement(track_a4, 'clipitem')
-                audio_clipitem_a4.set('id', tracka4_clip_item_id)
-                create_audio_sub_ele(audio_clipitem_a4, master_clip_trans, trans_path, trans_stop - trans_start, fps, trans_start_frame, trans_cut_from, trans_cut_to, media_files)
-                add_links(audio_clipitem_a4, trans_item_id, 4, tracka3_clip_item_id, 3, tracka4_clip_item_id, 4)
-        
+                    trans_master_clip_id = ET.SubElement(trans_item_track_a4, 'masterclipid')
+                    trans_master_clip_id.text = master_clip_trans
+                    
+                    trans_name = ET.SubElement(trans_item_track_a4, 'name')
+                    trans_name.text = os.path.basename(trans_path)
+                    ET.SubElement(trans_item_track_a4, 'enabled').text = 'TRUE'
+                    
+                    trans_duration = ET.SubElement(trans_item_track_a4, 'duration')
+                    trans_duration.text = str(trans_duration_frame)
+                    add_rate(trans_item_track_a4, fps, 'FALSE')
+                    
+                    trans_start_elem = ET.SubElement(trans_item_track_a4, 'start')
+                    trans_start_frame = current_frame + get_duration_frames(trans_start, fps)
+                    trans_start_elem.text = str(trans_start_frame)
+                    
+                    trans_end = ET.SubElement(trans_item_track_a4, 'end')
+                    trans_end_frame = current_frame + get_duration_frames(trans_stop, fps)
+                    trans_end.text = str(trans_end_frame)
+                    
+                    trans_in = ET.SubElement(trans_item_track_a4, 'in')
+                    trans_in.text = str(round(get_duration_frames(trans_cut_from, fps), 0))
+                    
+                    trans_out = ET.SubElement(trans_item_track_a4, 'out')
+                    trans_out.text = str(round(get_duration_frames(trans_cut_to, fps), 0))
+
+                    ET.SubElement(trans_item_track_a4, 'pproTicksIn').text = '0'
+                    ET.SubElement(trans_item_track_a4, 'pproTicksOut').text = str(frames_to_ticks(trans_duration_frame, fps))
+                    trans_item_track_a4_file = ET.SubElement(trans_item_track_a4, 'file')
+                    trans_item_track_a4_file.set('id', str(media_files[trans_path]))
+                    add_audio_source_track(trans_item_track_a4, 1)
+                    filter_el = ET.SubElement(trans_item_track_a4, "filter")
+                    # <effect>
+                    effect = ET.SubElement(filter_el, "effect")
+
+                    ET.SubElement(effect, "name").text = "Audio Levels"
+                    ET.SubElement(effect, "effectid").text = "audiolevels"
+                    ET.SubElement(effect, "effectcategory").text = "audiolevels"
+                    ET.SubElement(effect, "effecttype").text = "audiolevels"
+                    ET.SubElement(effect, "mediatype").text = "audio"
+                    ET.SubElement(effect, "pproBypass").text = "false"
+
+                    # <parameter authoringApp="PremierePro">
+                    parameter = ET.SubElement(effect, "parameter", attrib={"authoringApp": "PremierePro"})
+
+                    ET.SubElement(parameter, "parameterid").text = "level"
+                    ET.SubElement(parameter, "name").text = "Level"
+                    ET.SubElement(parameter, "valuemin").text = "0"
+                    ET.SubElement(parameter, "valuemax").text = "3.98109"
+                    ET.SubElement(parameter, "value").text = "1"
+                    add_marker(trans_item_track_a4)
+                    create_log_and_color_element(trans_item_track_a4, False)
+                    is_set_track_a4 = True
         current_frame += get_duration_frames(clip_duration, fps)
     
     
@@ -762,6 +1005,96 @@ def generate_premiere_xml(config_path, output_xml_path=None):
 
     ET.SubElement(track_v4, 'enabled').text = 'TRUE'
     ET.SubElement(track_v4, 'locked').text = 'FALSE'
+    
+    ET.SubElement(track_a1, 'enabled').text = 'TRUE'
+    ET.SubElement(track_a1, 'locked').text = 'FALSE'
+    ET.SubElement(track_a1, 'outputchannelindex').text = '1'
+    
+    ET.SubElement(track_a2, 'enabled').text = 'TRUE'
+    ET.SubElement(track_a2, 'locked').text = 'FALSE'
+    ET.SubElement(track_a2, 'outputchannelindex').text = '2'
+    
+    ET.SubElement(track_a4, 'enabled').text = 'TRUE'
+    ET.SubElement(track_a4, 'locked').text = 'FALSE'
+    ET.SubElement(track_a4, 'outputchannelindex').text = '1'
+    
+    ET.SubElement(track_a3, 'enabled').text = 'TRUE'
+    ET.SubElement(track_a3, 'locked').text = 'FALSE'
+    ET.SubElement(track_a3, 'outputchannelindex').text = '2'
+
+    # Logic cho source bin
+    logo_source_clip = ET.SubElement(source_bin_children, 'clip')
+    logo_source_clip.set('id', master_clip_logo)
+    logo_source_clip.set('explodedTracks', 'true')
+    ET.SubElement(logo_source_clip, 'uuid').text = str(uuid.uuid4())
+    ET.SubElement(logo_source_clip, 'masterclipid').text = master_clip_logo
+    ET.SubElement(logo_source_clip, 'ismasterclip').text = 'TRUE'
+    ET.SubElement(logo_source_clip, 'duration').text = str(round(logo_clip_duration_frame))
+    add_rate(logo_source_clip, fps, 'FALSE')
+    ET.SubElement(logo_source_clip, 'name').text = os.path.basename(logo_path)
+    logo_source_media = ET.SubElement(logo_source_clip, 'media')
+    logo_source_video = ET.SubElement(logo_source_media, 'video')
+    ls_video_track = ET.SubElement(logo_source_video, 'track')
+    ls_video_clipitem = ET.SubElement(ls_video_track, 'clipitem')
+    ls_video_clipitem.set('id', logo_clip_id)
+    ET.SubElement(ls_video_clipitem, 'masterclipid').text = master_clip_logo
+    ET.SubElement(ls_video_clipitem, 'name').text = os.path.basename(logo_path)
+    add_rate(ls_video_clipitem, fps, 'TRUE')
+    ET.SubElement(ls_video_clipitem, 'alphatype').text = 'straight'
+    logo_clip_file = ET.SubElement(ls_video_clipitem, 'file')
+    logo_clip_file.set('id', media_files[logo_path])
+    create_log_and_color_element(logo_source_clip)
+
+    # Transition
+    trans_source_clip = ET.SubElement(source_bin_children, 'clip')
+    trans_source_clip.set('id', master_clip_trans)
+    trans_source_clip.set('explodedTracks', 'true')
+    ET.SubElement(trans_source_clip, 'uuid').text = str(uuid.uuid4())
+    ET.SubElement(trans_source_clip, 'masterclipid').text = master_clip_trans
+    ET.SubElement(trans_source_clip, 'ismasterclip').text = 'TRUE'
+    ET.SubElement(trans_source_clip, 'duration').text = str(round(get_duration_frames(trans_duration_frame, fps)))
+    add_rate(trans_source_clip, fps, 'FALSE')
+    ET.SubElement(trans_source_clip, 'name').text = os.path.basename(trans_path)
+    trans_source_media = ET.SubElement(trans_source_clip, 'media')
+    add_marker(trans_source_clip)
+    trans_source_video = ET.SubElement(trans_source_media, 'video')
+    trans_video_track = ET.SubElement(trans_source_video, 'track')
+    trans_video_clipitem = ET.SubElement(trans_video_track, 'clipitem')
+    trans_video_clipitem.set('id', trans_video_clip_id)
+    ET.SubElement(trans_video_clipitem, 'masterclipid').text = master_clip_trans
+    ET.SubElement(trans_video_clipitem, 'name').text = os.path.basename(trans_path)
+    add_rate(trans_video_clipitem, fps, 'TRUE')
+    ET.SubElement(trans_video_clipitem, 'alphatype').text = 'straight'
+    trans_clip_file = ET.SubElement(trans_video_clipitem, 'file')
+    trans_clip_file.set('id', media_files[trans_path])
+
+    add_links(trans_video_clipitem, trans_video_clip_id, 1, trans_audio_clip_id1, 1, trans_audio_clip_id2, 2)
+
+    # Audio 
+    trans_audio1 = ET.SubElement(trans_source_media, 'audio')
+    trans_audio1_track = ET.SubElement(trans_audio1, 'track')
+    trans_audio1_track_clipitem = ET.SubElement(trans_audio1_track, 'clipitem')
+    trans_audio1_track_clipitem.set('id', trans_audio_clip_id1)
+    ET.SubElement(trans_audio1_track_clipitem, 'masterclipid').text = master_clip_trans
+    ET.SubElement(trans_audio1_track_clipitem, 'name').text = os.path.basename(trans_path)
+    add_rate(trans_audio1_track_clipitem, fps, 'FALSE')
+    trans_audio1_track_clipitem_file = ET.SubElement(trans_audio1_track_clipitem, 'file')
+    trans_audio1_track_clipitem_file.set('id', media_files[trans_path])
+    add_audio_source_track(trans_audio1_track_clipitem, 1)
+    add_links(trans_audio1_track_clipitem, trans_video_clip_id, 1, trans_audio_clip_id1, 1, trans_audio_clip_id2, 2)
+
+    trans_audio2_track = ET.SubElement(trans_audio1, 'track')
+    trans_audio2_track_clipitem = ET.SubElement(trans_audio2_track, 'clipitem')
+    trans_audio2_track_clipitem.set('id', trans_audio_clip_id2)
+    ET.SubElement(trans_audio2_track_clipitem, 'masterclipid').text = master_clip_trans
+    ET.SubElement(trans_audio2_track_clipitem, 'name').text = os.path.basename(trans_path)
+    add_rate(trans_audio2_track_clipitem, fps, 'FALSE')
+    trans_audio2_track_clipitem_file = ET.SubElement(trans_audio2_track_clipitem, 'file')
+    trans_audio2_track_clipitem_file.set('id', media_files[trans_path])
+    add_audio_source_track(trans_audio2_track_clipitem, 2)
+    add_links(trans_audio2_track_clipitem, trans_video_clip_id, 1, trans_audio_clip_id1, 1, trans_audio_clip_id2, 2)
+    create_log_and_color_element(trans_source_clip)
+
     # Timecode
     timecode = ET.SubElement(sequence, 'timecode')
     tc_rate = ET.SubElement(timecode, 'rate')
