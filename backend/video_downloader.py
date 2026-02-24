@@ -5,18 +5,20 @@ Lọc video theo thời lượng
 """
 
 import os
+from pathlib import Path
 import sys
 import subprocess
 import json
 from datetime import timedelta
+from consts import MAIN_CLIPS_DIR
 
 # ==========================================
 # CẤU HÌNH
 # ==========================================
 OUTPUT_DIR = "D:\\FunnyVideo\\Main_clips\\animals"  # Thư mục lưu video
-MAX_DURATION = 120  # Thời lượng tối đa (giây) - 2 phút
+MAX_DURATION = 1000  # Thời lượng tối đa (giây) - 2 phút
 VIDEO_FORMAT = "mp4"  # Format video
-VIDEO_QUALITY = "720"  # 720p (nhanh), có thể đổi sang 1080, 480...
+VIDEO_QUALITY = "1080"  # 720p (nhanh), có thể đổi sang 1080, 480...
 
 # ==========================================
 # KIỂM TRA YT-DLP
@@ -134,15 +136,23 @@ def download_video(url, output_dir=OUTPUT_DIR, max_duration=MAX_DURATION):
     
     # Format selector đảm bảo có cả video và audio
     # Thử nhiều format fallback để đảm bảo có tiếng
+    # cmd = [
+    #     "yt-dlp",
+    #     "-f", f"bestvideo[height<={VIDEO_QUALITY}]+bestaudio/best[height<={VIDEO_QUALITY}]/best",
+    #     "--merge-output-format", VIDEO_FORMAT,
+    #     "-o", os.path.join(output_dir, "%(title)s.%(ext)s"),
+    #     "--no-playlist",
+    #     "--progress",  # Hiển thị progress bar
+    #     "--newline",   # Mỗi progress update trên dòng mới
+    #     "--audio-multistreams",  # Đảm bảo lấy audio
+    #     url
+    # ]
     cmd = [
         "yt-dlp",
-        "-f", f"bestvideo[height<={VIDEO_QUALITY}]+bestaudio/best[height<={VIDEO_QUALITY}]/best",
-        "--merge-output-format", VIDEO_FORMAT,
+        "-f", f"bestvideo[height<={VIDEO_QUALITY}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[height<={VIDEO_QUALITY}]",
+        "--merge-output-format", "mp4",
         "-o", os.path.join(output_dir, "%(title)s.%(ext)s"),
         "--no-playlist",
-        "--progress",  # Hiển thị progress bar
-        "--newline",   # Mỗi progress update trên dòng mới
-        "--audio-multistreams",  # Đảm bảo lấy audio
         url
     ]
     
@@ -326,6 +336,184 @@ def search_and_download(query, max_results=10, output_dir=OUTPUT_DIR):
         print(f"❌ Lỗi: {e}")
 
 # ==========================================
+# TẢI TIKTOK
+# ==========================================
+def download_tiktok(url, output_dir=OUTPUT_DIR):
+    """
+    Tải video TikTok
+    """
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\n🔍 Đang kiểm tra TikTok video...")
+
+    # Lấy info trước
+    cmd_info = [
+        "yt-dlp",
+        "--dump-json",
+        url
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd_info,
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding='utf-8',
+            errors='replace'
+        )
+        info = json.loads(result.stdout)
+    except Exception as e:
+        print(f"❌ Lỗi lấy thông tin TikTok: {e}")
+        return False
+
+    duration = info.get("duration", 0)
+    title = info.get("title", "Unknown")
+    uploader = info.get("uploader", "Unknown")
+
+    print(f"🎵 Video: {title}")
+    print(f"👤 Tác giả: {uploader}")
+    print(f"⏱️  Thời lượng: {timedelta(seconds=duration)}")
+
+    # if duration and duration > max_duration:
+    #     print(f"⚠️  Video dài hơn {max_duration}s - BỎ QUA")
+    #     return False
+
+    print("\n⬇️  Đang tải TikTok...")
+
+    cmd_download = [
+        "yt-dlp",
+        "-f", "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best",
+        "--merge-output-format", "mp4",
+        "-o", os.path.join(output_dir, "tiktok_%(uploader)s_%(title)s.%(ext)s"),
+        url
+    ]
+
+    try:
+        subprocess.run(cmd_download, check=True)
+        print("✅ Tải TikTok thành công!")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Lỗi tải TikTok: {e}")
+        return False
+
+def download_tiktok_profile(profile_url, limit=10, output_dir=OUTPUT_DIR):
+    """
+    Tải nhiều video từ profile TikTok
+    """
+
+    print(f"\n🔍 Đang lấy danh sách video từ profile...")
+    print(f"👤 Profile: {profile_url}")
+
+    cmd = [
+        "yt-dlp",
+        "--flat-playlist",
+        "--dump-json",
+        "--playlist-items", f"1-{limit}",
+        profile_url
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        videos = []
+        for line in result.stdout.strip().split("\n"):
+            if line:
+                try:
+                    videos.append(json.loads(line))
+                except:
+                    pass
+
+        print(f"📋 Tìm thấy {len(videos)} video")
+
+        for i, video in enumerate(videos, 1):
+            video_url = video.get("url")
+            print(f"\n[{i}/{len(videos)}] Đang tải...")
+            download_tiktok(video_url, output_dir)
+
+        print("\n✅ Hoàn tất tải profile!")
+
+    except Exception as e:
+        print(f"❌ Lỗi profile TikTok: {e}")
+
+# ==========================================
+# TẢI X
+# ==========================================
+def download_social_network_video(url, social_network_name : str, output_dir="downloads"):
+    """
+    Tải video từ URL
+    Hiển thị progress real-time
+    Không kiểm tra duration
+    """
+
+    if not url:
+        print("❌ URL không hợp lệ")
+        return False
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    cmd = [
+        "yt-dlp",
+        "-f", "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best",
+        "--merge-output-format", "mp4",
+        "-o", os.path.join(output_dir, social_network_name + "_%(title)s.%(ext)s"),
+        "--no-playlist",
+        "--progress",
+        "--newline",
+        url
+    ]
+
+    print("\n⬇️  Đang tải video...")
+    print(f"📁 Lưu vào: {output_dir}")
+    print()
+
+    try:
+        subprocess.run(cmd, check=True)
+        print("\n✅ Tải thành công!")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print("\n❌ Lỗi khi tải video")
+        print(f"Mã lỗi: {e.returncode}")
+        return False
+
+    except FileNotFoundError:
+        print("\n❌ Không tìm thấy yt-dlp")
+        print("Cài đặt bằng: pip install yt-dlp")
+        return False
+    
+def back_to_menu(url: str, choice: str):
+    if url == "0":
+        choice = "0"
+
+def exec_func_by_choice(choice: str) -> bool:
+    if choice == "1":
+        url = input("🎵 URL TikTok video: ").strip()
+        if url:
+            download_tiktok(url)
+
+    elif choice == "2":
+        url = input("👤 URL TikTok profile: ").strip()
+        limit_input = input("📊 Số lượng video (mặc định 10): ").strip()
+        limit = int(limit_input) if limit_input else 10
+        if url:
+            download_tiktok_profile(url, limit=limit)
+    elif choice == "0":
+        print("\n👋 Tạm biệt!")
+        return False
+    else:
+        print("❌ Lựa chọn không hợp lệ!")
+        return False
+
+# ==========================================
 # GIAO DIỆN CHÍNH
 # ==========================================
 def main():
@@ -336,65 +524,106 @@ def main():
     # Kiểm tra yt-dlp
     if not check_ytdlp():
         return
-    
-    print(f"\n📌 Cấu hình:")
-    print(f"   - Thư mục: {OUTPUT_DIR}")
-    print(f"   - Thời lượng tối đa: {MAX_DURATION}s ({MAX_DURATION//60}p)")
-    print(f"   - Chất lượng: {VIDEO_QUALITY}p")
-    
-    while True:
-        print("\n" + "="*60)
-        print("MENU:")
-        print("="*60)
-        print("1. Tải 1 video")
-        print("2. Tải playlist")
-        print("3. Tải Shorts từ kênh")
-        print("4. Tìm kiếm và tải")
-        print("5. Thay đổi cấu hình")
-        print("0. Thoát")
-        print("="*60)
-        
-        choice = input("\n👉 Chọn: ").strip()
-        
-        if choice == "1":
-            url = input("📹 URL video: ").strip()
-            if url:
-                download_video(url)
-        
-        elif choice == "2":
-            url = input("📋 URL playlist: ").strip()
-            limit_input = input("📊 Giới hạn số video (Enter = tất cả): ").strip()
-            limit = int(limit_input) if limit_input else None
-            if url:
-                download_playlist(url, limit=limit)
-        
-        elif choice == "3":
-            url = input("👤 URL kênh (VD: https://www.youtube.com/@channelname): ").strip()
-            limit_input = input("📊 Số lượng Shorts (mặc định 10): ").strip()
-            limit = int(limit_input) if limit_input else 10
-            if url:
-                download_shorts(url, limit=limit)
-        
-        elif choice == "4":
-            query = input("🔍 Từ khóa tìm kiếm: ").strip()
-            limit_input = input("📊 Số kết quả (mặc định 10): ").strip()
-            limit = int(limit_input) if limit_input else 10
-            if query:
-                search_and_download(query, max_results=limit)
-        
-        elif choice == "5":
-            print(f"\n📌 Cấu hình hiện tại:")
-            print(f"   - OUTPUT_DIR: {OUTPUT_DIR}")
-            print(f"   - MAX_DURATION: {MAX_DURATION}s")
-            print(f"   - VIDEO_QUALITY: {VIDEO_QUALITY}p")
-            print("\n💡 Để thay đổi, sửa trực tiếp trong file!")
-        
-        elif choice == "0":
-            print("\n👋 Tạm biệt!")
-            break
-        
+    while(True):
+        save_path = Path(input("Nhập link folder lưu video tải về: "))
+        if save_path.exists():
+            if not save_path.is_dir():
+                print("Bạn phải nhập link folder!")
+            else: 
+                break
         else:
-            print("❌ Lựa chọn không hợp lệ!")
+            try:
+                save_path.mkdir(parents=True, exist_ok=True)
+                break
+            except: 
+                print("Không tạo được thư mục theo đường dẫn đã nhập")
+                
+    is_select_menu = True    
+    choice = ""
+    while True:
+        if is_select_menu:
+            print("\n" + "="*60)
+            print("MENU:")
+            print("="*60)
+            # print("1. Tải 1 video")
+            # print("2. Tải playlist")
+            # print("3. Tải Shorts từ kênh")
+            # print("4. Tìm kiếm và tải")
+            # print("5. Thay đổi cấu hình")
+            print("1. Tải TikTok video bằng URL")
+            print("2. Tải TikTok video theo profile")
+            print("3. Tải X video bằng URL")
+            print("4. Tải Instagram video bằng URL")
+            print("0. Thoát")
+            print("="*60)
+
+            choice = input("\n👉 Chọn: ").strip()
+            is_select_menu = False
+        else:
+            if choice == "0":
+                print("\n👋 Tạm biệt!")
+                break
+            url = ""
+            print("Nhập số 0 để đổi thư mực lưu video")
+            print("Nhập số -1 để quay lại menu")
+            url = input("🎵 URL: ").strip()
+            menu_choice = ["0", "-1"]
+            if choice == "1":
+                if url.replace(" ", "") not in menu_choice:
+                    download_tiktok(url, save_path)
+
+            elif choice == "2":
+                limit_input = input("📊 Số lượng video (mặc định 10): ").strip()
+                limit = int(limit_input) if limit_input else 10
+                if url.replace(" ", "") not in menu_choice:
+                    download_tiktok_profile(url, limit, save_path)
+            elif choice == "3":
+                if url.replace(" ", "") not in menu_choice:
+                    download_social_network_video(url, "x", save_path)
+            elif choice == "4":
+                if url.replace(" ", "") not in menu_choice:
+                    download_social_network_video(url, "instagram", save_path)
+            else:
+                print("❌ Lựa chọn không hợp lệ!")
+            
+            if url.replace(" ", "") == "0":
+                save_path = input("Nhập link folder lưu video tải về: ")
+            if url.replace(" ", "") == "-1":
+                is_select_menu = True
+            
+
+        # if choice == "1":
+        #     url = input("📹 URL video: ").strip()
+        #     if url:
+        #         download_video(url)
+        #
+        # elif choice == "2":
+        #     url = input("📋 URL playlist: ").strip()
+        #     limit_input = input("📊 Giới hạn số video (Enter = tất cả): ").strip()
+        #     limit = int(limit_input) if limit_input else None
+        #     if url:
+        #         download_playlist(url, limit=limit)
+        #
+        # elif choice == "3":
+        #     url = input("👤 URL kênh (VD: https://www.youtube.com/@channelname): ").strip()
+        #     limit_input = input("📊 Số lượng Shorts (mặc định 10): ").strip()
+        #     limit = int(limit_input) if limit_input else 10
+        #     if url:
+        #         download_shorts(url, limit=limit)
+        #
+        # elif choice == "4":
+        #     query = input("🔍 Từ khóa tìm kiếm: ").strip()
+        #     limit_input = input("📊 Số kết quả (mặc định 10): ").strip()
+        #     limit = int(limit_input) if limit_input else 10
+        #     if query:
+        #         search_and_download(query, max_results=limit)
+        #
+        # elif choice == "5":
+        #     print(f"\n📌 Cấu hình hiện tại:")
+        #     print(f"   - OUTPUT_DIR: {OUTPUT_DIR}")
+        #     print(f"   - MAX_DURATION: {MAX_DURATION}s")
+        #     print(f"   - VIDEO_QUALITY: {VIDEO_QUALITY}p")
+        #     print("\n💡 Để thay đổi, sửa trực tiếp trong file!")
 
 if __name__ == "__main__":
     try:
