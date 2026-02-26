@@ -10,6 +10,7 @@ import sys
 import subprocess
 import json
 from datetime import timedelta
+import datetime
 from consts import MAIN_CLIPS_DIR
 
 # ==========================================
@@ -447,7 +448,7 @@ def download_tiktok_profile(profile_url, limit=10, output_dir=OUTPUT_DIR):
 # ==========================================
 # TẢI X
 # ==========================================
-def download_social_network_video(url, social_network_name : str, output_dir="downloads"):
+def download_social_network_video(url, output_dir="downloads"):
     """
     Tải video từ URL
     Hiển thị progress real-time
@@ -459,12 +460,13 @@ def download_social_network_video(url, social_network_name : str, output_dir="do
         return False
 
     os.makedirs(output_dir, exist_ok=True)
-
+    today = datetime.datetime.now()
+    date_download = f"{today.day:02d}{today.month:02d}{today.year}"
     cmd = [
         "yt-dlp",
         "-f", "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best",
         "--merge-output-format", "mp4",
-        "-o", os.path.join(output_dir, social_network_name + "_%(title)s.%(ext)s"),
+        "-o", os.path.join(output_dir, date_download  + "_%(title)s.%(ext)s"),
         "--no-playlist",
         "--progress",
         "--newline",
@@ -494,25 +496,6 @@ def back_to_menu(url: str, choice: str):
     if url == "0":
         choice = "0"
 
-def exec_func_by_choice(choice: str) -> bool:
-    if choice == "1":
-        url = input("🎵 URL TikTok video: ").strip()
-        if url:
-            download_tiktok(url)
-
-    elif choice == "2":
-        url = input("👤 URL TikTok profile: ").strip()
-        limit_input = input("📊 Số lượng video (mặc định 10): ").strip()
-        limit = int(limit_input) if limit_input else 10
-        if url:
-            download_tiktok_profile(url, limit=limit)
-    elif choice == "0":
-        print("\n👋 Tạm biệt!")
-        return False
-    else:
-        print("❌ Lựa chọn không hợp lệ!")
-        return False
-
 # ==========================================
 # GIAO DIỆN CHÍNH
 # ==========================================
@@ -541,55 +524,37 @@ def main():
     is_select_menu = True    
     choice = ""
     while True:
-        if is_select_menu:
-            print("\n" + "="*60)
-            print("MENU:")
-            print("="*60)
-            # print("1. Tải 1 video")
-            # print("2. Tải playlist")
-            # print("3. Tải Shorts từ kênh")
-            # print("4. Tìm kiếm và tải")
-            # print("5. Thay đổi cấu hình")
-            print("1. Tải TikTok video bằng URL")
-            print("2. Tải TikTok video theo profile")
-            print("3. Tải X video bằng URL")
-            print("4. Tải Instagram video bằng URL")
-            print("0. Thoát")
-            print("="*60)
-
-            choice = input("\n👉 Chọn: ").strip()
-            is_select_menu = False
-        else:
-            if choice == "0":
-                print("\n👋 Tạm biệt!")
-                break
-            url = ""
+        # if is_select_menu:
+        #     print("\n" + "="*60)
+        #     print("MENU:")
+        #     print("="*60)
+        #     # print("1. Tải 1 video")
+        #     # print("2. Tải playlist")
+        #     # print("3. Tải Shorts từ kênh")
+        #     # print("4. Tìm kiếm và tải")
+        #     # print("5. Thay đổi cấu hình")
+        #     print("1. Tải TikTok, Instagram, X video bằng URL")
+        #     print("0. Thoát")
+        #     print("="*60)
+        #
+        #     choice = input("\n👉 Chọn: ").strip()
+        #     is_select_menu = False
+        # else:
+        #     if choice == "0":
+        #         print("\n👋 Tạm biệt!")
+        #         break
+        #     url = ""
             print("Nhập số 0 để đổi thư mực lưu video")
-            print("Nhập số -1 để quay lại menu")
+            # print("Nhập số -1 để quay lại menu")
             url = input("🎵 URL: ").strip()
             menu_choice = ["0", "-1"]
-            if choice == "1":
-                if url.replace(" ", "") not in menu_choice:
-                    download_tiktok(url, save_path)
-
-            elif choice == "2":
-                limit_input = input("📊 Số lượng video (mặc định 10): ").strip()
-                limit = int(limit_input) if limit_input else 10
-                if url.replace(" ", "") not in menu_choice:
-                    download_tiktok_profile(url, limit, save_path)
-            elif choice == "3":
-                if url.replace(" ", "") not in menu_choice:
-                    download_social_network_video(url, "x", save_path)
-            elif choice == "4":
-                if url.replace(" ", "") not in menu_choice:
-                    download_social_network_video(url, "instagram", save_path)
-            else:
-                print("❌ Lựa chọn không hợp lệ!")
+            if url.replace(" ", "") not in menu_choice:
+               download_social_network_video(url, save_path)
             
             if url.replace(" ", "") == "0":
                 save_path = input("Nhập link folder lưu video tải về: ")
-            if url.replace(" ", "") == "-1":
-                is_select_menu = True
+            # if url.replace(" ", "") == "-1":
+            #     is_select_menu = True
             
 
         # if choice == "1":
