@@ -257,7 +257,9 @@ class ChannelSelectorApp(Tk):
                     "path": clip["path"],
                     "duration": duration,
                     "thumb_path": thumb_path,
-                    "var": tk.BooleanVar(value=True)
+                    "var": tk.BooleanVar(value=True),
+                    "index_in_array": tk.StringVar(value=len(editor.imported_clips) + 1),
+                    "index_render": tk.StringVar(value=len(editor.imported_clips) + 1)
                 })
 
         editor.render_clip_list()

@@ -187,7 +187,7 @@ class DDList(ctk.CTkFrame):
 # ClipItem class
 # -----------------------------
 class ClipItem(Item):
-    def __init__(self, master, clip, width, height, app_ref, **kwargs):
+    def __init__(self, master, clip, width, height, on_enter_index_render, app_ref, **kwargs):
         super().__init__(master, clip, width, height,
                          selection_handler=master._on_item_selected,
                          drag_handler=master._on_item_dragged,
@@ -222,7 +222,9 @@ class ClipItem(Item):
         # We can still do that.
         # self.app_ref._image_references.append(photo) 
         # Note: CTkImage object, not ImageTk.PhotoImage.
-        
+        index_entry = ctk.CTkEntry(self, textvariable=clip["index_render"], width=35)
+        index_entry.pack(side="left", padx=5)
+        index_entry.bind("<Return>", lambda e: on_enter_index_render(e, clip))
         # Checkbox
         # ctk checkbox uses variable (IntVar or BooleanVar, compatible)
         check = ctk.CTkCheckBox(self, variable=clip["var"], text="", width=24, command=lambda: self.app_ref.toggle_select_clip(self.app_ref.imported_clips.index(clip)))
