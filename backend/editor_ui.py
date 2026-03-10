@@ -148,52 +148,25 @@ class EditorWindow(ctk.CTkToplevel):
             # ClipItem expects (master, clip, ...)
             item = ClipItem(self.ddlist, clip, 600, 80, self._on_enter_index_render, self)
             self.ddlist.add_item(item)
-    def _on_enter_index_render(self, e, clip):
-        curr_clip_index_render = int(clip["index_render"].get())
-        curr_clip_index_in_array = int(clip["index_in_array"].get())
-        # chuyển sang index 0-based
-        base0_index_array = curr_clip_index_in_array - 1
-        base0_index_render = curr_clip_index_render - 1
-        min_index = min(base0_index_array, base0_index_render)
 
-        old_imported_clips = self.imported_clips.copy()
-        new_array_render = []
-        for index in range(0, min_index):
-            old_clip = old_imported_clips[index]
-            old_clip["index_render"].set(index + 1)
-            old_clip["index_in_array"].set(index + 1)
-            new_array_render.append(old_imported_clips[index])
-        
-        "Trường hợp đưa video lên trên"
-        if min_index == base0_index_render:
-            clip["index_in_array"].set(int(clip["index_render"].get()))
-            new_array_render.append(clip)
-            for index in range(base0_index_render, base0_index_array):
-                old_clip = old_imported_clips[index]
-                old_clip["index_render"].set(index + 2)
-                old_clip["index_in_array"].set(index + 2)
-                new_array_render.append(old_clip)
-            for index in range(base0_index_array + 1, len(old_imported_clips)):
-                old_clip = old_imported_clips[index]
-                old_clip["index_render"].set(index + 1)
-                old_clip["index_in_array"].set(index + 1)
-                new_array_render.append(old_clip)
-        "Trường hợp đưa clip xuống dưới"
-        if min_index == base0_index_array:
-            for index in range(base0_index_array + 1, base0_index_render + 1):
-                old_clip = old_imported_clips[index]
-                old_clip["index_render"].set(index)
-                old_clip["index_in_array"].set(index)
-                new_array_render.append(old_clip)
-            clip["index_in_array"].set(int(clip["index_render"].get()))
-            new_array_render.append(clip)
-            for index in range(base0_index_render + 1, len(old_imported_clips)):
-                old_clip = old_imported_clips[index]
-                old_clip["index_render"].set(index + 1)
-                old_clip["index_in_array"].set(index + 1)
-                new_array_render.append(old_clip)
-        self.imported_clips = new_array_render
-        self._raw_media_bin()
+    def _on_enter_index_render(self, e, clip):
+
+        new_index = int(clip["index_render"].get()) - 1
+        old_index = int(clip["index_in_array"].get()) - 1
+
+        if new_index == old_index:
+            return
+
+        clips = self.imported_clips
+
+        moved_clip = clips.pop(old_index)
+        clips.insert(new_index, moved_clip)
+
+        for i, item in enumerate(clips):
+            item["index_render"].set(i + 1)
+            item["index_in_array"].set(i + 1)
+            self.ddlist.list_of_items[i].update_ui(item)
+        self.imported_clips = clips
 
     def render_clip_list(self):
         self._raw_media_bin()
