@@ -491,57 +491,10 @@ def download_social_network_video(url, output_dir="downloads"):
         print("\n❌ Không tìm thấy yt-dlp")
         print("Cài đặt bằng: pip install yt-dlp")
         return False
-
-# ==========================================
-# TẢI Facebook
-# ==========================================
-def download_facebook_video(url: str, output_dir="downloads"):
-    """
-    Tải video Facebook
-    - Tránh codec VP9 (vp09)
-    - Ép về H264 + AAC
-    - Tự lấy cookie từ Chrome
-    """
-
-    if not url:
-        print("❌ URL không hợp lệ")
-        return False
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    cmd = [
-        "yt-dlp",
-        url,
-
-        # Lấy cookie từ Chrome (bắt buộc nếu video không public)
-        # "--cookies-from-browser", "chrome",
-
-        # Chọn format không phải VP9
-        # Ưu tiên H264 (avc1)
-        "-f", "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/best",
-
-        # Ép merge sang mp4
-        "--merge-output-format", "mp4",
-
-        # Ép re-encode nếu cần để đảm bảo H264
-        # "--recode-video", "mp4",
-
-        # Tên file
-        "-o", os.path.join(output_dir, "%(title)s.%(ext)s"),
-
-        # Hiển thị progress
-        "--progress",
-        "--newline"
-    ]
-
-    try:
-        process = subprocess.run(cmd, check=True)
-        print("✅ Tải thành công")
-        return True
-
-    except subprocess.CalledProcessError as e:
-        print("❌ Lỗi khi tải video:", e)
-        return False
+    
+def back_to_menu(url: str, choice: str):
+    if url == "0":
+        choice = "0"
 
 # ==========================================
 # GIAO DIỆN CHÍNH
