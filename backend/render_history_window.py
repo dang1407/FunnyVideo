@@ -229,13 +229,15 @@ class ClipViewerApp(ctk.CTkToplevel):
             # Open Editor
             editor = EditorWindow(self.master if self.master else self, self.channel_name)
             
-            for clip in clips_list:
+            for (index, clip) in enumerate(clips_list):
                 thumb_duration, thumb_path, width, height = get_video_info(clip.get("path"))
                 clip_obj = {
                     "path": clip.get("path"),
                     "duration": clip.get("duration"),
                     "thumb_path": thumb_path,
-                    "var": ctk.BooleanVar(value=clip.get("var", True)) # Lấy giá trị đã lưu
+                    "var": ctk.BooleanVar(value=clip.get("var", True)), # Lấy giá trị đã lưu
+                    "index_render": ctk.StringVar(value=clip.get("index_render", index)),
+                    "index_in_array": ctk.StringVar(value=clip.get("index_in_array", index)),
                 }
                 editor.imported_clips.append(clip_obj)
             

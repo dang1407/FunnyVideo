@@ -150,6 +150,8 @@ def save_render_history(used_videos: list, channel_path: str):
         # Nếu bạn cần biết clip có selected hay không thì có thể thêm:
         # cleaned["selected"] = clip["var"].get()
         cleaned["var"] = clip["var"].get()
+        cleaned["index_render"] = clip["index_render"].get()
+        cleaned["index_in_array"] = clip["index_in_array"].get()
         cleaned_clips.append(cleaned)
 
     entry = {

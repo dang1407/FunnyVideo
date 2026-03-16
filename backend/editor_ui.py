@@ -260,8 +260,6 @@ class EditorWindow(ctk.CTkToplevel):
         clip_to_export = []
         for clip in self.imported_clips:
             if clip["var"].get():
-                del clip["index_render"]
-                del clip["index_in_array"]
                 clip_to_export.append(clip)
         
         if not clip_to_export:
