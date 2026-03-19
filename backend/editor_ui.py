@@ -128,6 +128,9 @@ class EditorWindow(ctk.CTkToplevel):
 
         # Use DDList
         def on_reorder(new_order):
+            for index, clip in enumerate(new_order):
+                clip["index_render"].set(index + 1)
+                clip["index_in_array"].set(index + 1)
             self.imported_clips = new_order
             # Update display ??? Or just internal list?
             # Original code updated internal list.
@@ -155,7 +158,7 @@ class EditorWindow(ctk.CTkToplevel):
         if new_index == old_index:
             return
 
-        clips = self.imported_clips
+        clips = self.imported_clips.copy()
 
         moved_clip = clips.pop(old_index)
         clips.insert(new_index, moved_clip)
@@ -202,7 +205,8 @@ class EditorWindow(ctk.CTkToplevel):
                         "duration": duration,
                         "thumb_path": thumb_path,
                         "var": ctk.BooleanVar(value=True), # Default true? Original was false then true?
-                        "index_render": ctk.StringVar(value=len(self.imported_clips) + 1)
+                        "index_render": ctk.StringVar(value=len(self.imported_clips) + 1),
+                        "index_in_array": ctk.StringVar(value=len(self.imported_clips) + 1)
                     })
                     newly_added = True
 
