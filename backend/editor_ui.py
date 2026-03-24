@@ -163,12 +163,24 @@ class EditorWindow(ctk.CTkToplevel):
 
         moved_clip = clips.pop(old_index)
         clips.insert(new_index, moved_clip)
+        # Build clip -> ClipItem mapping to reorder ddlist
+        clip_to_item = {id(it.value): it for it in self.ddlist.list_of_items}
+        new_list_of_items = [clip_to_item[id(c)] for c in clips]
+        self.ddlist.list_of_items = new_list_of_items
 
         for i, item in enumerate(clips):
             item["index_render"].set(i + 1)
             item["index_in_array"].set(i + 1)
-            self.ddlist.list_of_items[i].update_ui(item)
+            # self.ddlist.list_of_items[i].update_ui(item)
+                # Update ddlist positions and visual layout
+        for i, it in enumerate(self.ddlist.list_of_items):
+            x = self.ddlist._offset_x
+            y = self.ddlist._offset_y + i * (self.ddlist._item_height + self.ddlist._gap)
+            it.set_position(x, y)
+            self.ddlist._position[it] = i
+
         self.imported_clips = clips
+        self.focus_set()
 
     def render_clip_list(self):
         self._raw_media_bin()

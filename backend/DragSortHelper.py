@@ -70,13 +70,15 @@ class Item(ctk.CTkFrame):
         self._move_lastx = event.x_root
         self._move_lasty = event.y_root
         self.place_configure(x=self._x, y=self._y)
-
+        self.focus_set()
         if self._drag_handler:
             # We might want to pass x, y relative to container?
             # The logic in DDList needs x,y. _x, _y are correct vars.
             self._drag_handler(self._x, self._y)
+        
 
     def _on_drop(self, event):
+        self.focus_set()
         if self._drop_handler:
             self._drop_handler()
 
