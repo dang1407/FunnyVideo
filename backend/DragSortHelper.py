@@ -46,10 +46,11 @@ class Item(ctk.CTkFrame):
             # Avoid overwriting existing bindings if buttons etc?
             # ctk buttons have their own events.
             # We generally want drag on Frame/Label, not Button which has action.
-            if not isinstance(child, (ctk.CTkButton, ctk.CTkCheckBox, ctk.CTkSwitch)):
-                child.bind("<ButtonPress-1>", self._on_selection)
-                child.bind("<B1-Motion>", self._on_drag)
-                child.bind("<ButtonRelease-1>", self._on_drop)
+            if not isinstance(child, (ctk.CTkButton, ctk.CTkCheckBox, ctk.CTkSwitch, ctk.CTkEntry)):
+                # Use add="+" to preserve default widget behavior (e.g. entry focus/selection)
+                child.bind("<ButtonPress-1>", self._on_selection, add="+")
+                child.bind("<B1-Motion>", self._on_drag, add="+")
+                child.bind("<ButtonRelease-1>", self._on_drop, add="+")
                 self._bind_children(child)
 
     def _on_selection(self, event):

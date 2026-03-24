@@ -131,6 +131,7 @@ class EditorWindow(ctk.CTkToplevel):
             for index, clip in enumerate(new_order):
                 clip["index_render"].set(index + 1)
                 clip["index_in_array"].set(index + 1)
+                self.ddlist.list_of_items[i].update_ui(clip)
             self.imported_clips = new_order
             # Update display ??? Or just internal list?
             # Original code updated internal list.
